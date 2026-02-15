@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="ru" dir="ltr">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description"
+        content="AI-система анализа моральных и этических дилемм. Три координирующих агента помогают осмыслить ситуацию.">
+    <title>Этический Анализ — AI Система</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Amiri:wght@400;700&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="static/style.css">
+</head>
+
+<body>
+    <!-- Background decoration -->
+    <div class="bg-decoration">
+        <div class="bg-orb bg-orb-1"></div>
+        <div class="bg-orb bg-orb-2"></div>
+        <div class="bg-orb bg-orb-3"></div>
+    </div>
+
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="header-icon">⚖️</div>
+            <h1>Этический Анализ</h1>
+            <p class="header-subtitle">AI-система для размышления над моральными дилеммами</p>
+            <div class="header-badge" id="header-badge">
+                <span class="badge-dot badge-loading"></span>
+                <span id="stats-info">Загрузка базы знаний...</span>
+            </div>
+        </header>
+
+        <!-- Input Section -->
+        <section class="input-section">
+            <div class="glass-card">
+                <h2 class="section-title">
+                    <span class="section-icon">📝</span>
+                    Опишите ситуацию
+                </h2>
+                <p class="section-hint">Расскажите о моральной дилемме или этическом вопросе, который вас беспокоит.
+                    Система проанализирует ситуацию с разных сторон и поможет вам в размышлении.</p>
+                <textarea id="situation-input"
+                    placeholder="Например: Мой коллега просит скрыть его ошибку в отчёте, которая может навредить клиенту. Я сомневаюсь, как поступить — рассказать руководителю или промолчать..."
+                    rows="5"></textarea>
+                <div class="input-actions">
+                    <span class="char-count" id="char-count">0 символов</span>
+                    <button id="analyze-btn" class="btn-primary" onclick="analyzeSubmit()" disabled>
+                        <span class="btn-icon">🔍</span>
+                        <span class="btn-text">Анализировать</span>
+                        <span class="btn-loader" id="btn-loader"></span>
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Disclaimer -->
+        <div class="disclaimer" id="disclaimer" style="display:none;">
+            <span class="disclaimer-icon">⚠️</span>
+            <p id="disclaimer-text"></p>
+        </div>
+
+        <!-- Results Section -->
+        <section class="results-section" id="results-section" style="display:none;">
+
+            <!-- Agent 1: Analyst -->
+            <div class="agent-card agent-analyst" id="card-analyst">
+                <div class="agent-header">
+                    <div class="agent-avatar">🔬</div>
+                    <div>
+                        <h3 class="agent-name">Агент-Аналитик</h3>
+                        <p class="agent-role">Структурный анализ ситуации</p>
+                    </div>
+                </div>
+                <div class="agent-body" id="analyst-body"></div>
+            </div>
+
+            <!-- Agent 2: Values Interpreter -->
+            <div class="agent-card agent-values" id="card-values">
+                <div class="agent-header">
+                    <div class="agent-avatar">📖</div>
+                    <div>
+                        <h3 class="agent-name">Агент-Интерпретатор Ценностей</h3>
+                        <p class="agent-role">Коран · Хадисы · Этические принципы</p>
+                    </div>
+                </div>
+                <div class="agent-body" id="values-body"></div>
+            </div>
+
+            <!-- Agent 3: Reflection -->
+            <div class="agent-card agent-reflection" id="card-reflection">
+                <div class="agent-header">
+                    <div class="agent-avatar">🪞</div>
+                    <div>
+                        <h3 class="agent-name">Агент-Рефлексии</h3>
+                        <p class="agent-role">Вопросы для размышления</p>
+                    </div>
+                </div>
+                <div class="agent-body" id="reflection-body"></div>
+            </div>
+
+            <!-- Meta info -->
+            <div class="meta-card" id="meta-card">
+                <div class="meta-header" onclick="toggleLogs()">
+                    <span>📋 Лог работы агентов</span>
+                    <span class="meta-toggle" id="meta-toggle">▼</span>
+                </div>
+                <div class="meta-body" id="meta-body" style="display:none;">
+                    <div id="logs-container"></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Footer -->
+        <footer class="app-footer">
+            <p>Система не выносит окончательных суждений. Решение всегда остаётся за вами.</p>
+        </footer>
+    </div>
+
+    <script src="static/app.js"></script>
+</body>
+
+</html>
