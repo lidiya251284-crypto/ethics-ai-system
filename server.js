@@ -1,5 +1,8 @@
 /**
- * Фикх-Помощник — Node.js сервер с Groq AI
+ * Фикх-Помощник — Node.js сервер (Мульти-провайдер AI)
+ * 
+ * Поддерживает: DeepSeek (рекомендуется), Groq, Mistral
+ * DeepSeek — работает из России, $2 при регистрации
  * 
  * Запуск: node server.js
  * Откройте: http://localhost:3000
@@ -14,103 +17,130 @@ const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname)));
 
-// ── Groq Config ─────────────────────────────────────────────
-const GROQ_URL = "api.groq.com";
-const GROQ_PATH = "/openai/v1/chat/completions";
-const GROQ_MODEL = "llama-3.3-70b-versatile";
-
-let GROQ_API_KEY = "";
-
-const SYSTEM_PROMPT = `Ты — учёный-факих (специалист по исламскому праву / фикху). Твоя задача — отвечать на вопросы пользователей по исламскому праву (фикху).
-
-ПРАВИЛА ОТВЕТОВ:
-1. Отвечай ТОЛЬКО на вопросы, связанные с исламским правом, поклонением, морально-этическими нормами ислама. На нерелигиозные вопросы вежливо отклоняй.
-
-2. ВСЕГДА указывай мнения разных мазхабов, если они различаются:
-   - Ханафитский мазхаб
-   - Маликитский мазхаб
-   - Шафиитский мазхаб
-   - Ханбалитский мазхаб
-   Если мнение единогласное — так и пиши.
-
-3. ОБЯЗАТЕЛЬНО приводи далили (доказательства):
-   - Аяты Корана (номер суры и аята)
-   - Хадисы (сборник: Бухари, Муслим и т.д.)
-   - Мнения авторитетных учёных
-
-4. Если вопрос сложный или неоднозначный — рекомендуй обратиться к компетентному учёному лично.
-
-5. Отвечай на русском языке. Арабские термины давай с переводом.
-
-6. Будь объективен — не навязывай один мазхаб.
-
-7. Форматируй ответ с **жирным** выделением, списками и подзаголовками.`;
-
-// ── Load API Key ────────────────────────────────────────────
-function loadKey() {
-    // 1. Environment variable
-    if (process.env.GROQ_API_KEY) {
-        GROQ_API_KEY = process.env.GROQ_API_KEY;
-        return;
+// ── Provider Configs ────────────────────────────────────────
+const PROVIDERS = {
+    deepseek: {
+        name: "DeepSeek",
+        hostname: "api.deepseek.com",
+        path: "/v1/chat/completions",
+        model: "deepseek-chat",
+        keyPrefix: "sk-",
+        signupUrl: "https://platform.deepseek.com/api_keys",
+        description: "🇨🇳 Работает из России! При регистрации $2 бонус."
+    },
+    groq: {
+        name: "Groq",
+        hostname: "api.groq.com",
+        path: "/openai/v1/chat/completions",
+        model: "llama-3.3-70b-versatile",
+        keyPrefix: "gsk_",
+        signupUrl: "https://console.groq.com/keys",
+        description: "⚡ Быстрый, бесплатный. Может не работать из РФ."
+    },
+    mistral: {
+        name: "Mistral",
+        hostname: "api.mistral.ai",
+        path: "/v1/chat/completions",
+        model: "mistral-small-latest",
+        keyPrefix: "",
+        signupUrl: "https://console.mistral.ai/api-keys",
+        description: "🇫🇷 Французская компания. Бесплатный тариф."
     }
-    // 2. .env file
+};
+
+let activeProvider = null;
+let apiKey = "";
+
+const SYSTEM_PROMPT = `Ты — учёный-факих (специалист по исламскому праву / фикху). Отвечай на русском языке.
+
+ПРАВИЛА:
+1. Отвечай ТОЛЬКО на вопросы исламского права, поклонения, этики ислама. Другие — вежливо отклоняй.
+2. Указывай мнения 4 мазхабов (Ханафитский, Маликитский, Шафиитский, Ханбалитский), если они различаются.
+3. Приводи далили: аяты Корана (сура:аят), хадисы (сборник), мнения учёных.
+4. Если вопрос неоднозначный — рекомендуй обратиться к учёному.
+5. Отвечай структурировано: **жирный**, списки, подзаголовки.
+6. Арабские термины давай с переводом.
+7. Будь объективен — не навязывай один мазхаб.`;
+
+// ── Load config from .env ──────────────────────────────────────
+function loadConfig() {
     const envPath = path.join(__dirname, ".env");
-    if (fs.existsSync(envPath)) {
-        const lines = fs.readFileSync(envPath, "utf-8").split("\n");
-        for (const line of lines) {
-            const match = line.match(/^GROQ_API_KEY\s*=\s*(.+)/);
-            if (match) { GROQ_API_KEY = match[1].trim().replace(/^["']|["']$/g, ""); return; }
-        }
+    if (!fs.existsSync(envPath)) return;
+    const lines = fs.readFileSync(envPath, "utf-8").split("\n");
+    for (const line of lines) {
+        let m = line.match(/^AI_PROVIDER\s*=\s*(.+)/);
+        if (m) activeProvider = m[1].trim().replace(/^["']|["']$/g, "");
+        m = line.match(/^AI_API_KEY\s*=\s*(.+)/);
+        if (m) apiKey = m[1].trim().replace(/^["']|["']$/g, "");
     }
 }
 
-// ── Groq API Call ───────────────────────────────────────────
-function callGroq(messages) {
+function saveConfig(provider, key) {
+    const envPath = path.join(__dirname, ".env");
+    fs.writeFileSync(envPath, `AI_PROVIDER=${provider}\nAI_API_KEY=${key}\n`, "utf-8");
+    activeProvider = provider;
+    apiKey = key;
+}
+
+// ── AI API Call ────────────────────────────────────────────────
+function callAI(provider, key, messages) {
+    const cfg = PROVIDERS[provider];
+    if (!cfg) return Promise.reject(new Error("Unknown provider: " + provider));
+
     return new Promise((resolve, reject) => {
         const payload = JSON.stringify({
-            model: GROQ_MODEL,
+            model: cfg.model,
             messages: messages,
             temperature: 0.7,
             max_tokens: 2048,
         });
 
-        const options = {
-            hostname: GROQ_URL,
-            path: GROQ_PATH,
+        const req = https.request({
+            hostname: cfg.hostname,
+            path: cfg.path,
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
-                "Authorization": `Bearer ${GROQ_API_KEY}`,
+                "Authorization": `Bearer ${key}`,
                 "Content-Length": Buffer.byteLength(payload),
             },
-        };
-
-        const req = https.request(options, (res) => {
+        }, (res) => {
             let body = "";
-            res.on("data", (chunk) => body += chunk);
+            res.on("data", c => body += c);
             res.on("end", () => {
                 try {
                     const data = JSON.parse(body);
                     if (res.statusCode === 200 && data.choices?.[0]?.message?.content) {
-                        resolve(data.choices[0].message.content);
+                        resolve({ ok: true, message: data.choices[0].message.content });
                     } else if (res.statusCode === 429) {
-                        resolve("⏳ Слишком много запросов. Подождите минуту и попробуйте снова.");
+                        resolve({ ok: false, message: "⏳ Лимит запросов. Подождите минуту." });
                     } else if (res.statusCode === 401 || res.statusCode === 403) {
-                        resolve("🔑 Неверный API-ключ Groq. Проверьте файл .env");
+                        resolve({ ok: false, message: `🔑 Ошибка авторизации (${res.statusCode}). Проверьте API-ключ для ${cfg.name}.` });
                     } else {
-                        resolve(`❌ Ошибка API (${res.statusCode}): ${(data.error?.message || body).substring(0, 200)}`);
+                        resolve({ ok: false, message: `❌ Ошибка ${cfg.name} (${res.statusCode}): ${(data.error?.message || "").substring(0, 200)}` });
                     }
                 } catch (e) {
-                    resolve(`❌ Ошибка парсинга ответа: ${e.message}`);
+                    resolve({ ok: false, message: `❌ Ошибка ответа от ${cfg.name}` });
                 }
             });
         });
 
-        req.on("error", (e) => resolve(`❌ Ошибка сети: ${e.message}`));
-        req.setTimeout(30000, () => { req.destroy(); resolve("⏳ Таймаут — сервер не ответил за 30 сек."); });
+        req.on("error", e => resolve({ ok: false, message: `❌ Сеть: ${e.message}` }));
+        req.setTimeout(45000, () => { req.destroy(); resolve({ ok: false, message: "⏳ Таймаут 45 сек." }); });
         req.write(payload);
         req.end();
     });
+}
+
+// Test if a provider + key works
+async function testProvider(provider, key) {
+    const cfg = PROVIDERS[provider];
+    if (!cfg) return { ok: false, message: "Unknown provider" };
+
+    const result = await callAI(provider, key, [
+        { role: "user", content: "Скажи: OK" }
+    ]);
+    return result;
 }
 
 // ── Routes ──────────────────────────────────────────────────
@@ -118,17 +148,51 @@ app.get("/", (req, res) => {
     res.sendFile(path.join(__dirname, "index.html"));
 });
 
+app.get("/api/status", (req, res) => {
+    const configured = !!(activeProvider && apiKey);
+    res.json({
+        status: "ok",
+        configured,
+        provider: activeProvider,
+        providerName: configured ? PROVIDERS[activeProvider]?.name : null,
+        model: configured ? PROVIDERS[activeProvider]?.model : null,
+        providers: Object.entries(PROVIDERS).map(([id, p]) => ({
+            id, name: p.name, description: p.description, signupUrl: p.signupUrl
+        }))
+    });
+});
+
+app.post("/api/setup", async (req, res) => {
+    const { provider, key } = req.body;
+    if (!provider || !PROVIDERS[provider]) {
+        return res.json({ status: "error", message: "Неверный провайдер" });
+    }
+    if (!key || key.length < 10) {
+        return res.json({ status: "error", message: "Введите API-ключ" });
+    }
+
+    console.log(`  🔑 Проверяю ключ для ${PROVIDERS[provider].name}...`);
+    const test = await testProvider(provider, key);
+
+    if (test.ok) {
+        saveConfig(provider, key);
+        console.log(`  ✅ ${PROVIDERS[provider].name} — работает!`);
+        res.json({ status: "ok", message: `✅ ${PROVIDERS[provider].name} настроен!`, providerName: PROVIDERS[provider].name });
+    } else {
+        console.log(`  ❌ ${PROVIDERS[provider].name} — ошибка:`, test.message);
+        res.json({ status: "error", message: test.message });
+    }
+});
+
 app.post("/api/chat", async (req, res) => {
-    if (!GROQ_API_KEY) {
-        return res.json({ status: "error", message: "🔑 API-ключ не настроен. Добавьте GROQ_API_KEY в файл .env" });
+    if (!activeProvider || !apiKey) {
+        return res.json({ status: "error", message: "⚙️ Настройте AI-провайдер. Нажмите ⚙️ в шапке." });
     }
 
     const { message, history } = req.body;
     if (!message) return res.json({ status: "error", message: "Пустое сообщение" });
 
     const messages = [{ role: "system", content: SYSTEM_PROMPT }];
-
-    // Add conversation history (last 20)
     if (history && Array.isArray(history)) {
         for (const msg of history.slice(-20)) {
             messages.push({ role: msg.role === "user" ? "user" : "assistant", content: msg.text || "" });
@@ -136,43 +200,28 @@ app.post("/api/chat", async (req, res) => {
     }
     messages.push({ role: "user", content: message });
 
-    const reply = await callGroq(messages);
-    res.json({ status: "ok", message: reply });
-});
-
-app.post("/api/set-key", (req, res) => {
-    const { key } = req.body;
-    if (!key || !key.startsWith("gsk_")) {
-        return res.json({ status: "error", message: "Ключ должен начинаться с gsk_" });
-    }
-
-    // Save to .env
-    const envPath = path.join(__dirname, ".env");
-    fs.writeFileSync(envPath, `GROQ_API_KEY=${key}\n`, "utf-8");
-    GROQ_API_KEY = key;
-    console.log("  ✅ API-ключ сохранён в .env");
-    res.json({ status: "ok", message: "Ключ сохранён!" });
-});
-
-app.get("/api/status", (req, res) => {
-    res.json({ status: "ok", has_key: !!GROQ_API_KEY, model: GROQ_MODEL });
+    const result = await callAI(activeProvider, apiKey, messages);
+    res.json({ status: result.ok ? "ok" : "error", message: result.message });
 });
 
 // ── Start ───────────────────────────────────────────────────
 const PORT = 3000;
 
-loadKey();
+loadConfig();
 app.listen(PORT, () => {
     console.log();
     console.log("  ☪️  Фикх-Помощник");
     console.log(`  🌐  http://localhost:${PORT}`);
-    console.log(`  🤖  Модель: ${GROQ_MODEL}`);
-    if (GROQ_API_KEY) {
-        console.log(`  🔑  API-ключ: ${GROQ_API_KEY.substring(0, 12)}...`);
+    if (activeProvider && apiKey) {
+        const p = PROVIDERS[activeProvider];
+        console.log(`  🤖  ${p.name} (${p.model})`);
+        console.log(`  🔑  Ключ: ${apiKey.substring(0, 8)}...`);
     } else {
-        console.log("  ⚠️   API-ключ НЕ найден!");
-        console.log("       Откройте http://localhost:3000 и введите ключ в настройках");
-        console.log("       Получить ключ: https://console.groq.com/keys");
+        console.log("  ⚙️  Провайдер НЕ настроен");
+        console.log("  📖  Откройте http://localhost:3000 → нажмите ⚙️");
+        console.log();
+        console.log("  Рекомендуем DeepSeek — работает из России!");
+        console.log("  Ключ: https://platform.deepseek.com/api_keys");
     }
     console.log();
 });

@@ -21,24 +21,29 @@
         <div class="bg-orb bg-orb-3"></div>
     </div>
 
-    <!-- API Key Banner -->
-    <div class="api-key-banner" id="api-key-banner" style="display:none;">
-        <div class="banner-content">
-            <p><strong>🔑 Введите API-ключ Groq для работы AI</strong></p>
-            <p style="font-size:0.85em; opacity:0.8; margin:4px 0">
-                Получите бесплатно на <a href="https://console.groq.com/keys" target="_blank"
-                    style="color:#14b8a6; text-decoration:underline">console.groq.com/keys</a>
-                (войти через Google)
-            </p>
-            <div style="display:flex; gap:8px; margin-top:8px; align-items:center">
-                <input type="text" id="api-key-input" placeholder="gsk_..."
-                    style="flex:1; padding:8px 12px; border-radius:8px; border:1px solid rgba(255,255,255,0.2); background:rgba(0,0,0,0.3); color:white; font-size:14px">
-                <button onclick="saveKey()"
-                    style="padding:8px 20px; border-radius:8px; border:none; background:#14b8a6; color:white; cursor:pointer; font-weight:600">
-                    Сохранить
+    <!-- Setup Modal -->
+    <div class="modal-overlay" id="setup-modal" style="display:none;">
+        <div class="modal-card" style="max-width:460px; padding:24px;">
+            <h2 style="margin:0 0 8px; font-size:1.3em;">⚙️ Настройка AI</h2>
+            <p style="margin:0 0 16px; opacity:0.7; font-size:0.9em;">Выберите провайдер и введите API-ключ</p>
+
+            <div id="provider-list" style="display:flex; flex-direction:column; gap:8px; margin-bottom:16px;"></div>
+
+            <div id="key-input-area" style="display:none;">
+                <label style="font-size:0.85em; font-weight:500; display:block; margin-bottom:6px;"
+                    id="key-label">API-ключ:</label>
+                <input type="text" id="setup-key-input" placeholder="Вставьте API-ключ..."
+                    style="width:100%; padding:10px 12px; border-radius:8px; border:1px solid rgba(255,255,255,0.2); background:rgba(0,0,0,0.3); color:white; font-size:14px; box-sizing:border-box; margin-bottom:8px;">
+                <p id="setup-link" style="font-size:0.8em; margin:0 0 12px; opacity:0.7;"></p>
+                <button onclick="submitSetup()" id="setup-submit-btn"
+                    style="width:100%; padding:10px; border-radius:8px; border:none; background:#14b8a6; color:white; cursor:pointer; font-weight:600; font-size:14px;">
+                    ✅ Проверить и сохранить
                 </button>
+                <p id="setup-status" style="font-size:0.85em; margin:8px 0 0; text-align:center; display:none;"></p>
             </div>
-            <p id="key-status" style="font-size:0.8em; margin-top:6px; color:#fbbf24; display:none"></p>
+
+            <button onclick="closeSetup()"
+                style="margin-top:12px; width:100%; padding:8px; border-radius:8px; border:1px solid rgba(255,255,255,0.15); background:transparent; color:rgba(255,255,255,0.6); cursor:pointer; font-size:13px;">Закрыть</button>
         </div>
     </div>
 
@@ -67,11 +72,9 @@
                 <div class="header-center">
                     <div class="header-icon">☪️</div>
                     <h1>Фикх-Помощник</h1>
-                    <p class="header-subtitle">AI-ассистент • Llama 3.3</p>
+                    <p class="header-subtitle" id="header-subtitle">AI-ассистент</p>
                 </div>
-                <button class="history-toggle-btn"
-                    onclick="document.getElementById('api-key-banner').style.display = document.getElementById('api-key-banner').style.display === 'none' ? 'block' : 'none'"
-                    title="Настройки">
+                <button class="history-toggle-btn" onclick="openSetup()" title="Настройки AI">
                     <span>⚙️</span>
                 </button>
             </div>
@@ -84,7 +87,7 @@
                     <div class="message-content">
                         <div class="message-text">
                             Ассаламу алейкум! 👋<br><br>
-                            Я — <strong>Фикх-Помощник</strong> на основе AI (Llama 3.3).<br>
+                            Я — <strong>Фикх-Помощник</strong> на основе AI.<br>
                             Задайте мне <strong>любой вопрос</strong> по исламскому праву.<br><br>
                             <span class="hint-text">
                                 <span class="madhab-tag madhab-hanafi">Ханафитский</span>
@@ -113,7 +116,7 @@
         </div>
 
         <footer class="app-footer">
-            <p>AI (Llama 3.3 via Groq). Для серьёзных вопросов обращайтесь к учёному.</p>
+            <p>Для серьёзных вопросов обращайтесь к учёному-алиму.</p>
         </footer>
     </div>
 

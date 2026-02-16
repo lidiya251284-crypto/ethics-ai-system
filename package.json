@@ -20,6 +20,8 @@
   },
   "homepage": "https://github.com/lidiya251284-crypto/ethics-ai-system#readme",
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.74.0",
+    "duckduckgo-ai-chat": "^1.0.0",
     "express": "^5.2.1"
   }
 }

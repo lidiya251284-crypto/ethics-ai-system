@@ -1,17 +1,17 @@
 /* ═══════════════════════════════════════════════════════════════
-   Фикх-Помощник — Chat Engine v7 (Node.js + Groq AI)
+   Фикх-Помощник — Chat Engine v9 (Multi-Provider AI)
    
-   • Отправка через /api/chat (сервер → Groq → Llama 3.3)
-   • Сохранение/ввод API-ключа через /api/set-key
-   • История чатов в localStorage
+   DeepSeek / Groq / Mistral — выбор в настройках ⚙️
+   История чатов в localStorage
    ═══════════════════════════════════════════════════════════════ */
 
 const STORAGE_KEY = "fiqh_helper_chats";
 let currentChatId = null, allChats = {}, isProcessing = false;
+let selectedProvider = null, providers = [];
 
 // ── Init ───────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", () => {
-    loadChats(); setupInput(); renderHistoryList(); checkApiKey();
+    loadChats(); setupInput(); renderHistoryList(); checkStatus();
     if (currentChatId && allChats[currentChatId]?.messages.length > 0) restoreChat(currentChatId);
     else startNewChat();
 });
@@ -22,34 +22,94 @@ function setupInput() {
     inp.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } });
 }
 
-async function checkApiKey() {
+async function checkStatus() {
     try {
         const r = await fetch("/api/status");
         const d = await r.json();
-        if (!d.has_key) document.getElementById("api-key-banner").style.display = "block";
+        providers = d.providers || [];
+        if (d.configured) {
+            document.getElementById("header-subtitle").textContent = `AI • ${d.providerName}`;
+        } else {
+            openSetup();
+        }
     } catch (e) {
-        document.getElementById("api-key-banner").style.display = "block";
+        console.error("Status check failed:", e);
     }
 }
 
-async function saveKey() {
-    const input = document.getElementById("api-key-input");
-    const status = document.getElementById("key-status");
-    const key = input.value.trim();
-    if (!key) { status.textContent = "Введите ключ"; status.style.display = "block"; return; }
+// ── Setup Modal ────────────────────────────────────────────────
+function openSetup() {
+    const modal = document.getElementById("setup-modal");
+    modal.style.display = "flex";
+    renderProviders();
+}
 
-    status.textContent = "⏳ Сохраняю..."; status.style.display = "block";
+function closeSetup() {
+    document.getElementById("setup-modal").style.display = "none";
+}
+
+function renderProviders() {
+    const list = document.getElementById("provider-list");
+    list.innerHTML = providers.map(p => `
+        <button onclick="selectProvider('${p.id}')" 
+            class="provider-btn ${selectedProvider === p.id ? 'selected' : ''}"
+            style="display:flex; align-items:center; gap:10px; padding:12px; border-radius:10px; 
+                   border:2px solid ${selectedProvider === p.id ? '#14b8a6' : 'rgba(255,255,255,0.1)'}; 
+                   background:${selectedProvider === p.id ? 'rgba(20,184,166,0.1)' : 'rgba(255,255,255,0.03)'}; 
+                   color:white; cursor:pointer; text-align:left; transition:all 0.2s;">
+            <div>
+                <div style="font-weight:600; font-size:0.95em;">${p.name}</div>
+                <div style="font-size:0.8em; opacity:0.7; margin-top:2px;">${p.description}</div>
+            </div>
+        </button>
+    `).join("");
+}
+
+function selectProvider(id) {
+    selectedProvider = id;
+    renderProviders();
+    const p = providers.find(x => x.id === id);
+    if (p) {
+        const area = document.getElementById("key-input-area");
+        area.style.display = "block";
+        document.getElementById("key-label").textContent = `API-ключ для ${p.name}:`;
+        document.getElementById("setup-link").innerHTML = `Получить ключ: <a href="${p.signupUrl}" target="_blank" style="color:#14b8a6; text-decoration:underline">${p.signupUrl.replace('https://', '')}</a>`;
+        document.getElementById("setup-key-input").value = "";
+        document.getElementById("setup-key-input").focus();
+        hideSetupStatus();
+    }
+}
+
+async function submitSetup() {
+    const key = document.getElementById("setup-key-input").value.trim();
+    if (!key) { showSetupStatus("Введите ключ", "#fbbf24"); return; }
+    if (!selectedProvider) { showSetupStatus("Выберите провайдер", "#fbbf24"); return; }
+
+    showSetupStatus("⏳ Проверяю ключ...", "#94a3b8");
+    document.getElementById("setup-submit-btn").disabled = true;
+
     try {
-        const r = await fetch("/api/set-key", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key }) });
+        const r = await fetch("/api/setup", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ provider: selectedProvider, key })
+        });
         const d = await r.json();
         if (d.status === "ok") {
-            status.textContent = "✅ Ключ сохранён!"; status.style.color = "#22c55e";
-            setTimeout(() => { document.getElementById("api-key-banner").style.display = "none"; }, 1500);
+            showSetupStatus("✅ " + d.message, "#22c55e");
+            document.getElementById("header-subtitle").textContent = `AI • ${d.providerName}`;
+            setTimeout(closeSetup, 1500);
         } else {
-            status.textContent = "❌ " + d.message; status.style.color = "#fbbf24";
+            showSetupStatus("❌ " + d.message, "#ef4444");
         }
-    } catch (e) { status.textContent = "❌ Ошибка соединения с сервером"; status.style.color = "#ef4444"; }
+    } catch (e) {
+        showSetupStatus("❌ Ошибка соединения с сервером", "#ef4444");
+    }
+    document.getElementById("setup-submit-btn").disabled = false;
 }
+
+function showSetupStatus(msg, color) { const s = document.getElementById("setup-status"); s.textContent = msg; s.style.color = color; s.style.display = "block"; }
+function hideSetupStatus() { document.getElementById("setup-status").style.display = "none"; }
 
 // ── Storage ────────────────────────────────────────────────────
 function loadChats() { try { const d = localStorage.getItem(STORAGE_KEY); if (d) { const p = JSON.parse(d); allChats = p.chats || {}; currentChatId = p.currentChatId || null; } } catch (e) { allChats = {}; } }
@@ -66,7 +126,7 @@ function clearChatUI() {
     document.getElementById("chat-messages").innerHTML = `
         <div class="message bot-message" style="animation:none"><div class="message-avatar">🤖</div>
         <div class="message-content"><div class="message-text">
-            Ассаламу алейкум! 👋<br><br>Я — <strong>Фикх-Помощник</strong> на основе AI.<br>Задайте мне <strong>любой вопрос</strong> по исламскому праву.<br><br>
+            Ассаламу алейкум! 👋<br><br>Задайте <strong>любой вопрос</strong> по исламскому праву.<br><br>
             <span class="hint-text">
             <span class="madhab-tag madhab-hanafi">Ханафитский</span>
             <span class="madhab-tag madhab-maliki">Маликитский</span>
@@ -138,10 +198,10 @@ async function callBackend(userMessage) {
     const resp = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: userMessage, history, session_id: currentChatId }),
+        body: JSON.stringify({ message: userMessage, history }),
     });
     const data = await resp.json();
-    if (data.status === "error") return "⚠️ " + (data.message || "Ошибка сервера");
+    if (data.status === "error") return "⚠️ " + (data.message || "Ошибка");
     return md2html(data.message || "");
 }
 
