@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Фикх-Помощник — AI-ассистент по исламскому праву на основе Google Gemini.">
+    <meta name="description" content="Фикх-Помощник — AI-ассистент по исламскому праву.">
     <title>Фикх-Помощник — Исламское право</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -15,7 +15,6 @@
 </head>
 
 <body>
-    <!-- Background decoration -->
     <div class="bg-decoration">
         <div class="bg-orb bg-orb-1"></div>
         <div class="bg-orb bg-orb-2"></div>
@@ -38,31 +37,7 @@
     </aside>
     <div class="sidebar-overlay" id="sidebar-overlay" onclick="toggleHistory()"></div>
 
-    <!-- Settings Modal -->
-    <div class="modal-overlay" id="settings-overlay" onclick="closeSettings()">
-        <div class="modal-card" onclick="event.stopPropagation()">
-            <div class="modal-header">
-                <h3>⚙️ Настройки</h3>
-                <button class="sidebar-close-btn" onclick="closeSettings()">✕</button>
-            </div>
-            <div class="modal-body">
-                <label class="setting-label">API-ключ Google Gemini</label>
-                <p class="setting-hint">Получите бесплатный ключ на <a href="https://aistudio.google.com/apikey"
-                        target="_blank" rel="noopener">aistudio.google.com/apikey</a> → «Create API key in new project»
-                </p>
-                <div class="api-key-input-row">
-                    <input type="password" id="api-key-input" class="api-key-input" placeholder="AIza..."
-                        autocomplete="off">
-                    <button class="toggle-vis-btn" onclick="toggleKeyVisibility()" title="Показать/Скрыть">👁</button>
-                </div>
-                <button class="save-key-btn" onclick="saveApiKey()">💾 Сохранить ключ</button>
-                <div id="key-status" class="key-status"></div>
-            </div>
-        </div>
-    </div>
-
     <div class="app-container">
-        <!-- Header -->
         <header class="app-header">
             <div class="header-top-row">
                 <button class="history-toggle-btn" onclick="toggleHistory()" title="История чатов">
@@ -71,22 +46,12 @@
                 <div class="header-center">
                     <div class="header-icon">☪️</div>
                     <h1>Фикх-Помощник</h1>
-                    <p class="header-subtitle">AI-ассистент по исламскому праву</p>
+                    <p class="header-subtitle">Исламское право • 4 мазхаба</p>
                 </div>
-                <button class="history-toggle-btn" onclick="openSettings()" title="Настройки">
-                    <span>⚙️</span>
-                </button>
+                <div style="width:40px"></div>
             </div>
         </header>
 
-        <!-- API Key Banner (shown when no key) -->
-        <div class="api-banner" id="api-banner">
-            <span>🔑</span>
-            <span>Для работы нужен API-ключ Google Gemini (бесплатно)</span>
-            <button onclick="openSettings()">Настроить</button>
-        </div>
-
-        <!-- Chat Container -->
         <div class="chat-container glass-card">
             <div class="chat-messages" id="chat-messages">
                 <div class="message bot-message">
@@ -94,8 +59,8 @@
                     <div class="message-content">
                         <div class="message-text">
                             Ассаламу алейкум! 👋<br><br>
-                            Я — Фикх-Помощник на основе AI. Задайте мне <strong>любой вопрос</strong> по исламскому
-                            праву, и я дам ответ с указанием мнений четырёх мазхабов.<br><br>
+                            Я — <strong>Фикх-Помощник</strong>. Задайте вопрос по исламскому праву, и я дам ответ с
+                            мнениями мазхабов и далилями.<br><br>
                             <span class="hint-text">
                                 <span class="madhab-tag madhab-hanafi">Ханафитский</span>
                                 <span class="madhab-tag madhab-maliki">Маликитский</span>
@@ -115,8 +80,7 @@
             </div>
 
             <div class="chat-input-area">
-                <textarea id="chat-input" placeholder="Задайте любой вопрос по фикху..." rows="1"
-                    maxlength="2000"></textarea>
+                <textarea id="chat-input" placeholder="Задайте вопрос по фикху..." rows="1" maxlength="2000"></textarea>
                 <button id="send-btn" class="send-btn" onclick="sendMessage()">
                     <span class="send-icon">➤</span>
                 </button>
@@ -124,11 +88,11 @@
         </div>
 
         <footer class="app-footer">
-            <p>Ответы генерирует AI (Google Gemini) на основе исламских источников. Для серьёзных вопросов обращайтесь к
-                компетентному учёному.</p>
+            <p>Для серьёзных вопросов обращайтесь к компетентному учёному.</p>
         </footer>
     </div>
 
+    <script src="static/fiqh_db.js"></script>
     <script src="static/app.js"></script>
 </body>
 

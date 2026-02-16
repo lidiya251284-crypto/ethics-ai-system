@@ -1,211 +1,54 @@
 /* ═══════════════════════════════════════════════════════════════
-   Фикх-Помощник — Chat Engine v4 (Google Gemini AI)
+   Фикх-Помощник — Chat Engine v6 (Offline — Smart Match)
    
-   • gemini-1.5-flash → gemini-2.0-flash-lite → gemini-2.0-flash
-   • Автоматический fallback при ошибке квоты
-   • Контекст беседы (последние 20 сообщений)
+   • Нет API, нет сервера — всё работает из файла
+   • Нечёткий поиск по ключевым словам + морфология
+   • 28+ вопросов с мнениями 4 мазхабов и далилями
    • История чатов в localStorage
    ═══════════════════════════════════════════════════════════════ */
 
-// ── Constants ──────────────────────────────────────────────────
 const STORAGE_KEY = "fiqh_helper_chats";
-const API_KEY_STORAGE = "fiqh_helper_api_key";
-const GEMINI_MODELS = ["gemini-1.5-flash", "gemini-2.0-flash-lite", "gemini-2.0-flash"];
-const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
+let currentChatId = null, allChats = {}, isProcessing = false;
 
-const SYSTEM_PROMPT = `Ты — учёный-факих (специалист по исламскому праву / фикху). Твоя задача — отвечать на вопросы пользователей по исламскому праву (фикху).
-
-ПРАВИЛА ОТВЕТОВ:
-1. Отвечай ТОЛЬКО на вопросы, связанные с исламским правом, поклонением, морально-этическими нормами ислама. На нерелигиозные вопросы вежливо отклоняй.
-
-2. ВСЕГДА указывай мнения разных мазхабов, если они различаются:
-   - Ханафитский мазхаб
-   - Маликитский мазхаб
-   - Шафиитский мазхаб
-   - Ханбалитский мазхаб
-   Если мнение единогласное — так и пиши.
-
-3. ОБЯЗАТЕЛЬНО приводи далили (доказательства):
-   - Аяты Корана (номер суры и аята)
-   - Хадисы (сборник: Бухари, Муслим и т.д.)
-   - Мнения авторитетных учёных
-
-4. Если вопрос сложный или неоднозначный — рекомендуй обратиться к компетентному учёному лично.
-
-5. Отвечай на русском языке. Арабские термины давай с переводом.
-
-6. Будь объективен — не навязывай один мазхаб, но можешь указать какое мнение более распространённое.
-
-7. Форматируй ответ чистым текстом с **жирным** выделением, списками через • и подзаголовками.
-
-8. В конце ответа давай 1-2 ссылки на авторитетные источники: islamqa.info, islamweb.net, azan.ru, fatwaonline.net`;
-
-// ── State ──────────────────────────────────────────────────────
-let currentChatId = null;
-let allChats = {};
-let isProcessing = false;
-let apiKey = "";
-
-// ── Initialization ─────────────────────────────────────────────
+// ── Init ───────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", () => {
-    apiKey = localStorage.getItem(API_KEY_STORAGE) || "";
-    loadChats();
-    setupInput();
-    renderHistoryList();
-    updateApiBanner();
-
-    if (currentChatId && allChats[currentChatId] && allChats[currentChatId].messages.length > 0) {
-        restoreChat(currentChatId);
-    } else {
-        startNewChat();
-    }
+    loadChats(); setupInput(); renderHistoryList();
+    if (currentChatId && allChats[currentChatId]?.messages.length > 0) restoreChat(currentChatId);
+    else startNewChat();
 });
 
 function setupInput() {
-    const input = document.getElementById("chat-input");
-    input.addEventListener("input", () => {
-        input.style.height = "auto";
-        input.style.height = Math.min(input.scrollHeight, 120) + "px";
-    });
-    input.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
-    });
+    const inp = document.getElementById("chat-input");
+    inp.addEventListener("input", () => { inp.style.height = "auto"; inp.style.height = Math.min(inp.scrollHeight, 120) + "px"; });
+    inp.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } });
 }
 
-// ── API Key ────────────────────────────────────────────────────
-function openSettings() {
-    const overlay = document.getElementById("settings-overlay");
-    const input = document.getElementById("api-key-input");
-    overlay.classList.add("open");
-    if (apiKey) input.value = apiKey;
-    document.getElementById("key-status").textContent = "";
-}
-
-function closeSettings() {
-    document.getElementById("settings-overlay").classList.remove("open");
-}
-
-function toggleKeyVisibility() {
-    const inp = document.getElementById("api-key-input");
-    inp.type = inp.type === "password" ? "text" : "password";
-}
-
-async function saveApiKey() {
-    const input = document.getElementById("api-key-input");
-    const status = document.getElementById("key-status");
-    const key = input.value.trim();
-
-    if (!key) { status.className = "key-status error"; status.textContent = "❌ Введите API-ключ"; return; }
-
-    status.className = "key-status"; status.textContent = "⏳ Проверяю ключ...";
-
-    // Test each model until one works
-    for (const model of GEMINI_MODELS) {
-        try {
-            const resp = await fetch(`${GEMINI_BASE}/${model}:generateContent?key=${key}`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ contents: [{ parts: [{ text: "Ответь одним словом: работает" }] }] }),
-            });
-
-            if (resp.ok) {
-                apiKey = key;
-                localStorage.setItem(API_KEY_STORAGE, key);
-                status.className = "key-status success";
-                status.textContent = `✅ Ключ работает! (модель: ${model})`;
-                updateApiBanner();
-                setTimeout(closeSettings, 1500);
-                return;
-            }
-
-            const err = await resp.json();
-            const errMsg = err.error?.message || "";
-            if (errMsg.toLowerCase().includes("quota") || resp.status === 429) {
-                console.warn(`${model}: quota exceeded, trying next...`);
-                continue;
-            }
-            if (resp.status === 400 || resp.status === 401 || resp.status === 403) {
-                status.className = "key-status error";
-                status.textContent = "❌ Неверный ключ. Проверьте и попробуйте снова.";
-                return;
-            }
-        } catch (e) {
-            status.className = "key-status error";
-            status.textContent = "❌ Ошибка сети. Проверьте интернет.";
-            return;
-        }
-    }
-
-    // All models had quota issues — save anyway and inform
-    apiKey = key;
-    localStorage.setItem(API_KEY_STORAGE, key);
-    status.className = "key-status error";
-    status.textContent = "⚠️ Ключ принят, но лимит исчерпан. Создайте новый ключ в новом проекте на aistudio.google.com/apikey";
-    updateApiBanner();
-}
-
-function updateApiBanner() {
-    const banner = document.getElementById("api-banner");
-    banner.classList.toggle("hidden", !!apiKey);
-}
-
-// ── LocalStorage ───────────────────────────────────────────────
-function loadChats() {
-    try {
-        const data = localStorage.getItem(STORAGE_KEY);
-        if (data) { const p = JSON.parse(data); allChats = p.chats || {}; currentChatId = p.currentChatId || null; }
-    } catch (e) { allChats = {}; }
-}
-function saveChats() {
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ chats: allChats, currentChatId })); } catch (e) { }
-}
+// ── Storage ────────────────────────────────────────────────────
+function loadChats() { try { const d = localStorage.getItem(STORAGE_KEY); if (d) { const p = JSON.parse(d); allChats = p.chats || {}; currentChatId = p.currentChatId || null; } } catch (e) { allChats = {}; } }
+function saveChats() { try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ chats: allChats, currentChatId })); } catch (e) { } }
 function genId() { return Date.now().toString(36) + Math.random().toString(36).substr(2, 5); }
 
 // ── Chat Management ────────────────────────────────────────────
-function startNewChat() {
-    const id = genId();
-    allChats[id] = { id, title: "Новый чат", messages: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
-    currentChatId = id; saveChats(); clearChatUI(); renderHistoryList();
-}
-function switchToChat(chatId) {
-    if (!allChats[chatId]) return;
-    currentChatId = chatId; saveChats(); restoreChat(chatId); renderHistoryList(); toggleHistory();
-}
-function deleteChat(chatId, event) {
-    event.stopPropagation(); delete allChats[chatId];
-    if (chatId === currentChatId) { const k = Object.keys(allChats); k.length > 0 ? (currentChatId = k[k.length - 1], restoreChat(currentChatId)) : startNewChat(); }
-    saveChats(); renderHistoryList();
-}
-function clearAllHistory() {
-    if (!confirm("Удалить всю историю чатов?")) return;
-    allChats = {}; currentChatId = null; startNewChat();
-}
-function restoreChat(chatId) {
-    clearChatUI(); const chat = allChats[chatId];
-    if (!chat) return; chat.messages.forEach(m => appendMessageToUI(m.role, m.html, false)); scrollToBottom();
-}
+function startNewChat() { const id = genId(); allChats[id] = { id, title: "Новый чат", messages: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }; currentChatId = id; saveChats(); clearChatUI(); renderHistoryList(); }
+function switchToChat(id) { if (!allChats[id]) return; currentChatId = id; saveChats(); restoreChat(id); renderHistoryList(); toggleHistory(); }
+function deleteChat(id, ev) { ev.stopPropagation(); delete allChats[id]; if (id === currentChatId) { const k = Object.keys(allChats); k.length ? (currentChatId = k[k.length - 1], restoreChat(currentChatId)) : startNewChat(); } saveChats(); renderHistoryList(); }
+function clearAllHistory() { if (!confirm("Удалить всю историю?")) return; allChats = {}; currentChatId = null; startNewChat(); }
+function restoreChat(id) { clearChatUI(); const c = allChats[id]; if (c) c.messages.forEach(m => appendMsgUI(m.role, m.html, false)); scrollToBottom(); }
 function clearChatUI() {
     document.getElementById("chat-messages").innerHTML = `
-        <div class="message bot-message" style="animation:none">
-            <div class="message-avatar">🤖</div>
-            <div class="message-content"><div class="message-text">
-                Ассаламу алейкум! 👋<br><br>
-                Задайте мне <strong>любой вопрос</strong> по исламскому праву.<br><br>
-                <span class="hint-text">
-                <span class="madhab-tag madhab-hanafi">Ханафитский</span>
-                <span class="madhab-tag madhab-maliki">Маликитский</span>
-                <span class="madhab-tag madhab-shafii">Шафиитский</span>
-                <span class="madhab-tag madhab-hanbali">Ханбалитский</span>
-                </span>
-            </div></div>
-        </div>`;
+        <div class="message bot-message" style="animation:none"><div class="message-avatar">🤖</div>
+        <div class="message-content"><div class="message-text">
+            Ассаламу алейкум! 👋<br><br>Задайте <strong>любой вопрос</strong> по фикху.<br><br>
+            <span class="hint-text">
+            <span class="madhab-tag madhab-hanafi">Ханафитский</span>
+            <span class="madhab-tag madhab-maliki">Маликитский</span>
+            <span class="madhab-tag madhab-shafii">Шафиитский</span>
+            <span class="madhab-tag madhab-hanbali">Ханбалитский</span></span>
+        </div></div></div>`;
 }
 
 // ── Sidebar ────────────────────────────────────────────────────
-function toggleHistory() {
-    document.getElementById("history-sidebar").classList.toggle("open");
-    document.getElementById("sidebar-overlay").classList.toggle("open");
-}
+function toggleHistory() { document.getElementById("history-sidebar").classList.toggle("open"); document.getElementById("sidebar-overlay").classList.toggle("open"); }
 function renderHistoryList() {
     const list = document.getElementById("history-list");
     const sorted = Object.values(allChats).sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
@@ -217,153 +60,152 @@ function renderHistoryList() {
                 <div class="history-item-title">${esc(c.title)}</div>
                 <div class="history-item-date">${fmtDate(new Date(c.updatedAt))}</div>
             </div>
-            <button class="history-item-delete" onclick="deleteChat('${c.id}', event)" title="Удалить">🗑</button>
+            <button class="history-item-delete" onclick="deleteChat('${c.id}', event)">🗑</button>
         </div>`).join("");
 }
-function fmtDate(d) {
-    const m = Math.floor((Date.now() - d) / 60000);
-    if (m < 1) return "Только что"; if (m < 60) return `${m} мин. назад`;
-    const h = Math.floor(m / 60); if (h < 24) return `${h} ч. назад`;
-    const days = Math.floor(h / 24); if (days < 7) return `${days} дн. назад`;
-    return d.toLocaleDateString("ru-RU", { day: "numeric", month: "short" });
-}
+function fmtDate(d) { const m = Math.floor((Date.now() - d) / 60000); if (m < 1) return "Только что"; if (m < 60) return `${m} мин.`; const h = Math.floor(m / 60); if (h < 24) return `${h} ч.`; const days = Math.floor(h / 24); if (days < 7) return `${days} дн.`; return d.toLocaleDateString("ru-RU", { day: "numeric", month: "short" }); }
 
 // ── Messages ───────────────────────────────────────────────────
 async function sendMessage() {
     if (isProcessing) return;
-    const input = document.getElementById("chat-input");
-    const text = input.value.trim(); if (!text) return;
-    input.value = ""; input.style.height = "auto";
+    const inp = document.getElementById("chat-input");
+    const text = inp.value.trim(); if (!text) return;
+    inp.value = ""; inp.style.height = "auto";
     addMessage("user", text);
-
-    isProcessing = true;
-    document.getElementById("send-btn").disabled = true;
+    isProcessing = true; document.getElementById("send-btn").disabled = true;
     showTyping();
 
-    let response;
-    if (!apiKey) {
-        response = '🔑 Нужен API-ключ.<br>Нажмите ⚙️ → вставьте ключ с <a href="https://aistudio.google.com/apikey" target="_blank" style="color:#14b8a6">aistudio.google.com/apikey</a>';
-    } else {
-        response = await callGemini(text);
-    }
+    // Simulate thinking delay
+    await new Promise(r => setTimeout(r, 400 + Math.random() * 600));
 
+    const response = findAnswer(text);
     hideTyping();
     addMessage("bot", response);
-    isProcessing = false;
-    document.getElementById("send-btn").disabled = false;
-    input.focus();
+    isProcessing = false; document.getElementById("send-btn").disabled = false; inp.focus();
 }
 
 function addMessage(role, content) {
     const html = role === "user" ? esc(content) : content;
     if (currentChatId && allChats[currentChatId]) {
-        const chat = allChats[currentChatId];
-        chat.messages.push({ role, html, text: content });
-        chat.updatedAt = new Date().toISOString();
-        if (role === "user" && chat.title === "Новый чат")
-            chat.title = content.substring(0, 50) + (content.length > 50 ? "…" : "");
+        const c = allChats[currentChatId]; c.messages.push({ role, html, text: content });
+        c.updatedAt = new Date().toISOString();
+        if (role === "user" && c.title === "Новый чат") c.title = content.substring(0, 50) + (content.length > 50 ? "…" : "");
         saveChats(); renderHistoryList();
     }
-    appendMessageToUI(role, html, true);
+    appendMsgUI(role, html, true);
 }
-
-function appendMessageToUI(role, html, animate) {
-    const c = document.getElementById("chat-messages");
-    const div = document.createElement("div");
+function appendMsgUI(role, html, anim) {
+    const c = document.getElementById("chat-messages"); const div = document.createElement("div");
     div.className = `message ${role === "user" ? "user-message" : "bot-message"}`;
-    if (!animate) div.style.animation = "none";
-    div.innerHTML = `<div class="message-avatar">${role === "user" ? "👤" : "🤖"}</div>
-        <div class="message-content"><div class="message-text">${html}</div></div>`;
+    if (!anim) div.style.animation = "none";
+    div.innerHTML = `<div class="message-avatar">${role === "user" ? "👤" : "🤖"}</div><div class="message-content"><div class="message-text">${html}</div></div>`;
     c.appendChild(div); scrollToBottom();
 }
-
 function showTyping() { document.getElementById("typing-indicator").style.display = "flex"; scrollToBottom(); }
 function hideTyping() { document.getElementById("typing-indicator").style.display = "none"; }
 function scrollToBottom() { const c = document.getElementById("chat-messages"); setTimeout(() => c.scrollTop = c.scrollHeight, 50); }
 
-// ── Gemini API (multi-model fallback) ──────────────────────────
-async function callGemini(userMessage) {
-    const chat = allChats[currentChatId];
-    const history = [];
-    const recent = chat.messages.slice(-20);
-    for (const msg of recent) {
-        history.push({ role: msg.role === "user" ? "user" : "model", parts: [{ text: msg.text }] });
-    }
-    history.push({ role: "user", parts: [{ text: userMessage }] });
+// ── Smart Matching Engine ──────────────────────────────────────
+const STEMS = {
+    "молитв": "намаз", "молить": "намаз", "салят": "намаз", "салат": "намаз", "намаз": "намаз",
+    "омовен": "вуду", "абдест": "вуду", "тахар": "вуду", "вуду": "вуду", "вуз": "вуду",
+    "пост": "пост", "ураз": "пост", "саум": "пост", "сухур": "пост", "ифтар": "пост", "рамадан": "пост",
+    "развод": "развод", "талак": "развод", "разводит": "развод", "хульг": "развод",
+    "муж": "муж", "жен": "жена", "жена": "жена", "содержа": "нафака", "содержит": "нафака", "нафак": "нафака", "работ": "работа",
+    "закят": "закят", "милостын": "закят", "нисаб": "закят",
+    "хиджаб": "хиджаб", "покрыти": "хиджаб", "никаб": "хиджаб", "плат": "хиджаб", "аурат": "хиджаб",
+    "процент": "риба", "кредит": "риба", "ипотек": "риба", "банк": "риба", "риба": "риба", "ростовщ": "риба",
+    "гусль": "гусль", "большо": "гусль", "полно": "гусль", "джанаб": "гусль", "купан": "гусль",
+    "никах": "никах", "брак": "никах", "свадьб": "никах", "женить": "никах", "замуж": "никах", "махр": "никах",
+    "халяль": "халяль", "харам": "халяль", "свинин": "халяль", "еда": "халяль", "мяс": "халяль", "алкоголь": "халяль",
+    "таяммум": "таяммум", "песок": "таяммум", "сухо": "таяммум",
+    "пропущен": "каза", "каза": "каза", "возмещен": "каза",
+    "беременн": "беременность", "кормящ": "беременность",
+    "музык": "музыка", "песн": "музыка", "нашид": "музыка", "кальян": "курение",
+    "путник": "сафар", "путешеств": "сафар", "сафар": "сафар", "сокращен": "сафар",
+    "похорон": "джаназа", "джаназа": "джаназа", "мёртв": "джаназа", "умер": "джаназа", "смерт": "джаназа",
+    "сглаз": "рукъя", "порч": "рукъя", "джинн": "рукъя", "рукъя": "рукъя", "колдов": "рукъя", "сихр": "рукъя",
+    "борода": "борода", "брить": "борода", "бритв": "борода",
+    "курени": "курение", "курить": "курение", "сигарет": "курение", "вейп": "курение", "табак": "курение",
+    "фото": "фото", "фотограф": "фото", "изображен": "фото", "рисова": "фото", "рисун": "фото",
+    "хадж": "хадж", "умр": "хадж", "мекк": "хадж", "кааб": "хадж", "паломнич": "хадж",
+    "истихар": "истихара", "выбор": "истихара",
+    "собак": "животные", "кошк": "животные", "животн": "животные",
+    "суджуд": "суджуд", "сахв": "суджуд", "ошибк": "суджуд", "забыл": "суджуд",
+    "дуа": "дуа", "мольб": "дуа", "просить": "дуа",
+    "приветств": "приветствие", "салям": "приветствие", "салам": "приветствие", "алейкум": "приветствие", "привет": "приветствие", "здравств": "приветствие",
+    "месячн": "месячные", "менструац": "месячные", "хайд": "месячные",
+};
 
-    const body = {
-        system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
-        contents: history,
-        generationConfig: { temperature: 0.7, topP: 0.9, maxOutputTokens: 2048 },
-        safetySettings: [
-            { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
-            { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-            { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
-            { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
-        ],
-    };
+// Build topic → DB index mapping
+const TOPIC_MAP = {};
+FIQH_DB.forEach((entry, idx) => {
+    entry.keys.forEach(k => {
+        const topic = k.toLowerCase();
+        if (!TOPIC_MAP[topic]) TOPIC_MAP[topic] = [];
+        TOPIC_MAP[topic].push(idx);
+    });
+});
 
-    for (const model of GEMINI_MODELS) {
-        try {
-            const resp = await fetch(`${GEMINI_BASE}/${model}:generateContent?key=${apiKey}`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(body),
-            });
+function normalize(text) {
+    return text.toLowerCase().replace(/[?!.,;:\-—–«»"'()]/g, " ").replace(/\s+/g, " ").trim();
+}
 
-            if (!resp.ok) {
-                const err = await resp.json();
-                const msg = err.error?.message || "";
-                if (resp.status === 429 || msg.toLowerCase().includes("quota")) {
-                    console.warn(`${model}: quota, trying next`); continue;
+function findAnswer(query) {
+    const norm = normalize(query);
+    const words = norm.split(" ").filter(w => w.length > 2);
+
+    if (words.length === 0) return "Пожалуйста, задайте вопрос по исламскому праву (фикху). Например: <em>«Как делать омовение?»</em>";
+
+    // Score each DB entry
+    const scores = new Array(FIQH_DB.length).fill(0);
+
+    for (const word of words) {
+        // 1. Direct key match
+        for (let i = 0; i < FIQH_DB.length; i++) {
+            for (const key of FIQH_DB[i].keys) {
+                if (key.includes(word) || word.includes(key)) {
+                    scores[i] += 3;
                 }
-                if (resp.status === 401 || resp.status === 403) {
-                    return "🔑 Проблема с ключом. Нажмите ⚙️ и проверьте API-ключ.";
-                }
-                console.warn(`${model}: ${msg}`); continue;
             }
+        }
 
-            const data = await resp.json();
-            const cand = data.candidates?.[0];
-            if (!cand?.content?.parts?.[0]?.text) {
-                if (cand?.finishReason === "SAFETY") return "⚠️ Ответ заблокирован. Переформулируйте вопрос.";
-                continue;
+        // 2. Stem-based match
+        for (const [stem, topic] of Object.entries(STEMS)) {
+            if (word.startsWith(stem) || stem.startsWith(word.substring(0, Math.min(word.length, 4)))) {
+                // Find entries matching this topic
+                for (let i = 0; i < FIQH_DB.length; i++) {
+                    for (const key of FIQH_DB[i].keys) {
+                        if (key.includes(topic) || topic.includes(key)) {
+                            scores[i] += 2;
+                        }
+                    }
+                }
             }
-            return md2html(cand.content.parts[0].text);
-        } catch (e) {
-            if (e.message?.includes("Failed to fetch")) return "🌐 Нет интернета.";
-            continue;
         }
     }
 
-    return `⏳ Лимит всех моделей исчерпан. Создайте новый ключ:<br>
-    1. Откройте <a href="https://aistudio.google.com/apikey" target="_blank" style="color:#14b8a6">aistudio.google.com/apikey</a><br>
-    2. Нажмите «Create API key in <strong>new project</strong>»<br>
-    3. Скопируйте ключ → нажмите ⚙️ → вставьте`;
-}
+    // Find best match
+    let bestIdx = -1, bestScore = 0;
+    for (let i = 0; i < scores.length; i++) {
+        if (scores[i] > bestScore) { bestScore = scores[i]; bestIdx = i; }
+    }
 
-// ── Markdown → HTML ────────────────────────────────────────────
-function md2html(text) {
-    let h = text;
-    h = h.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
-    h = h.replace(/^#### (.+)$/gm, '<strong style="font-size:0.9em">$1</strong>');
-    h = h.replace(/^### (.+)$/gm, '<br><strong>$1</strong>');
-    h = h.replace(/^## (.+)$/gm, '<br><strong style="font-size:1.05em">$1</strong>');
-    h = h.replace(/^# (.+)$/gm, '<br><strong style="font-size:1.1em">$1</strong>');
-    h = h.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
-    h = h.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-    h = h.replace(/\*(.+?)\*/g, '<em>$1</em>');
-    h = h.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener" style="color:#14b8a6">$1</a>');
-    h = h.replace(/^[-*] (.+)$/gm, '• $1');
-    h = h.replace(/^\d+\.\s+(.+)$/gm, '• $1');
-    // Madhab color tags
-    h = h.replace(/\**(Ханафитский мазхаб|По ханафитскому мазхабу|Ханафиты)\**:?/gi, '<span class="madhab-tag madhab-hanafi">Ханафитский</span>');
-    h = h.replace(/\**(Маликитский мазхаб|По маликитскому мазхабу|Маликиты)\**:?/gi, '<span class="madhab-tag madhab-maliki">Маликитский</span>');
-    h = h.replace(/\**(Шафиитский мазхаб|По шафиитскому мазхабу|Шафииты)\**:?/gi, '<span class="madhab-tag madhab-shafii">Шафиитский</span>');
-    h = h.replace(/\**(Ханбалитский мазхаб|По ханбалитскому мазхабу|Ханбалиты)\**:?/gi, '<span class="madhab-tag madhab-hanbali">Ханбалитский</span>');
-    h = h.replace(/\n\n/g, '<br><br>');
-    h = h.replace(/\n/g, '<br>');
-    return h;
+    if (bestScore >= 3 && bestIdx >= 0) {
+        const entry = FIQH_DB[bestIdx];
+        return `<strong>${entry.title}</strong><br><br>${entry.answer}`;
+    }
+
+    // No match — suggest search + show topics
+    const topics = FIQH_DB.map(e => e.title).filter(t => t !== "Приветствие! 👋");
+    const topicList = topics.slice(0, 10).map(t => `• ${t}`).join("<br>");
+    const searchQ = encodeURIComponent(query + " фикх исламское право");
+
+    return `К сожалению, я не нашёл точного ответа на ваш вопрос в базе знаний.<br><br>
+<strong>Попробуйте:</strong><br>
+🔍 <a href="https://www.google.com/search?q=${searchQ}" target="_blank" style="color:#14b8a6">Поиск в Google</a><br>
+🔍 <a href="https://islamqa.info/ru/search?q=${encodeURIComponent(query)}" target="_blank" style="color:#14b8a6">Поиск на IslamQA</a><br><br>
+<strong>Или спросите по одной из этих тем:</strong><br>${topicList}<br>... и ещё ${topics.length - 10} тем.`;
 }
 
 function esc(t) { const d = document.createElement("div"); d.textContent = t; return d.innerHTML; }
