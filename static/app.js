@@ -1,664 +1,867 @@
-/**
- * Ethics AI System — Full Browser-Only Implementation
- * All agents, knowledge base, and search run in the browser.
- * Data sources:
- *   - Full Quran (6 236 ayahs) — risan/quran-json  (Arabic + Russian)
- *   - Full Sahih al-Bukhari (~7 563 hadith) — fawazahmed0/hadith-api (Arabic + Russian)
- */
+/* ═══════════════════════════════════════════════════════════════
+   Фикх-Помощник — Chat Engine
+   
+   Архитектура:
+   1. Чат-интерфейс с сохранением истории в localStorage
+   2. Агент-уточнитель — задаёт вопросы если нужно
+   3. Поиск по фикх-порталам (islamqa.info, islamweb.net, etc.)
+   4. Формирование ответа с метками мазхабов
+   ═══════════════════════════════════════════════════════════════ */
 
-// ═══════════════════════════════════════════════════════════════
-// CDN DATA SOURCES
-// ═══════════════════════════════════════════════════════════════
+// ── State ──────────────────────────────────────────────────────
+const STORAGE_KEY = "fiqh_helper_chats";
+let currentChatId = null;
+let allChats = {};
+let isProcessing = false;
 
-const CDN = {
-    quranRu: "https://cdn.jsdelivr.net/npm/quran-json@3.1.2/dist/quran_ru.json",
-    bukhariRu: "https://cdn.jsdelivr.net/gh/fawazahmed0/hadith-api@1/editions/rus-bukhari.min.json",
-    bukhariAr: "https://cdn.jsdelivr.net/gh/fawazahmed0/hadith-api@1/editions/ara-bukhari.min.json",
+// Fiqh source portals
+const FIQH_SOURCES = [
+    { domain: "islamqa.info", name: "IslamQA", lang: "ru" },
+    { domain: "islamweb.net", name: "IslamWeb", lang: "ru" },
+    { domain: "azan.ru", name: "Azan.ru", lang: "ru" },
+    { domain: "fatwaonline.net", name: "Fatwa Online", lang: "ru" },
+    { domain: "info-islam.ru", name: "Info-Islam", lang: "ru" },
+    { domain: "svetislama.com", name: "Свет Ислама", lang: "ru" },
+];
+
+// Madhab keywords for detection
+const MADHAB_KEYWORDS = {
+    hanafi: ["ханафит", "ханафи", "абу ханиф", "имам абу", "ханафитск"],
+    maliki: ["маликит", "малики", "имам малик", "маликитск"],
+    shafii: ["шафиит", "шафии", "имам шафи", "шафиитск"],
+    hanbali: ["ханбалит", "ханбали", "имам ахмад", "ибн ханбал", "ханбалитск"],
 };
 
-// ═══════════════════════════════════════════════════════════════
-// RUNTIME DATA STORES (populated by loadAllData)
-// ═══════════════════════════════════════════════════════════════
+const MADHAB_LABELS = {
+    hanafi: "Ханафитский",
+    maliki: "Маликитский",
+    shafii: "Шафиитский",
+    hanbali: "Ханбалитский",
+};
 
-let QURAN_AYAHS = [];   // { id, type, surah, surahRu, num, ar, ru, tags }
-let HADITHS = [];   // { id, type, col, n, ar, ru, tags, grade }
-let DATA_LOADED = false;
+// ── Knowledge base for common fiqh topics ──────────────────────
+const FIQH_KNOWLEDGE = {
+    "намаз": {
+        keywords: ["намаз", "салят", "молитва", "салат", "ракат", "рукуу", "суджуд", "суджда", "фаджр", "зухр", "аср", "магриб", "иша", "витр"],
+        answer: `Намаз (молитва) — один из пяти столпов ислама. Обязателен для каждого мусульманина, достигшего совершеннолетия.
 
-// ═══════════════════════════════════════════════════════════════
-// DATA LOADING
-// ═══════════════════════════════════════════════════════════════
+<strong>Пять обязательных молитв:</strong>
+• Фаджр (утренняя) — 2 ракаата
+• Зухр (полуденная) — 4 ракаата  
+• Аср (послеполуденная) — 4 ракаата
+• Магриб (вечерняя) — 3 ракаата
+• Иша (ночная) — 4 ракаата
 
-/** Fetch JSON with timeout */
-async function fetchJSON(url, timeoutMs = 30000) {
-    const ctrl = new AbortController();
-    const tid = setTimeout(() => ctrl.abort(), timeoutMs);
-    try {
-        const res = await fetch(url, { signal: ctrl.signal });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return await res.json();
-    } finally { clearTimeout(tid); }
-}
+<div class="madhab-section">
+<span class="madhab-tag madhab-hanafi">Ханафитский</span> Витр-намаз является ваджибом (обязательным). 3 ракаата.
+</div>
+<div class="madhab-section">
+<span class="madhab-tag madhab-shafii">Шафиитский</span> <span class="madhab-tag madhab-maliki">Маликитский</span> <span class="madhab-tag madhab-hanbali">Ханбалитский</span> Витр — сунна муаккада (настоятельная сунна), от 1 до 11 ракатов.
+</div>
 
-/** Generate basic tags from Russian text */
-function autoTags(text) {
-    if (!text) return [];
-    const kw = {
-        "справедливость": /справедлив|правосуди/i,
-        "милосердие": /милосерд|милост|сострадан/i,
-        "прощение": /прост|прощ|покаян/i,
-        "терпение": /терп|стойк|выдерж/i,
-        "честность": /честн|правдив|искренн/i,
-        "семья": /родител|мат[ьи]|отец|брат|сестр|семь|супруг|жен[аыу]|муж/i,
-        "знание": /знан|учен|наук|мудрост/i,
-        "благодеяние": /благ|добр|добродетел/i,
-        "запрет": /запрет|запрещ|харам|грех/i,
-        "молитва": /молитв|намаз|поклон/i,
-        "вера": /вер[ауы]|уверов|веру[юя]/i,
-        "покаяние": /покаян|раскаян|покайт/i,
-        "благотворительность": /закят|милостын|садак|пожертвован/i,
-        "торговля": /торгов|купл|продаж|сделк/i,
-        "обман": /обман|ложь|лжи|лгу/i,
-        "убийство": /убийств|уби[вйт]|кров/i,
-        "гордыня": /гордын|высокомер|надмен/i,
-        "зависть": /зависть|завидов/i,
-        "сироты": /сирот/i,
-        "соседи": /сосед/i,
-        "война": /войн|сражен|битв|джихад/i,
-        "пост": /пост[аеиу]|рамадан|говеть/i,
-        "наследство": /наследств|завещан/i,
-        "брак": /брак|свадьб|никях/i,
-        "развод": /развод|таляк/i,
-        "клятва": /клятв|обещан|обет/i,
-    };
-    const tags = [];
-    for (const [tag, rx] of Object.entries(kw)) {
-        if (rx.test(text)) tags.push(tag);
-    }
-    return tags.length ? tags : ["общая тема"];
-}
-
-/** Load full Quran from CDN and normalise into QURAN_AYAHS format */
-async function loadQuranData(onProgress) {
-    onProgress?.("📖 Загрузка Корана...");
-    const surahs = await fetchJSON(CDN.quranRu);
-    const ayahs = [];
-    for (const s of surahs) {
-        for (const v of s.verses) {
-            ayahs.push({
-                id: `q${s.id}_${v.id}`,
-                type: "quran",
-                surah: s.translation || s.name,
-                num: `${s.id}:${v.id}`,
-                ar: v.text,
-                ru: v.translation,
-                tags: autoTags(v.translation)
-            });
-        }
-    }
-    onProgress?.(`📖 Коран: ${ayahs.length} аятов ✓`);
-    return ayahs;
-}
-
-/** Load Sahih al-Bukhari (Russian + Arabic) from CDN */
-async function loadBukhariData(onProgress) {
-    onProgress?.("📜 Загрузка Сахих аль-Бухари...");
-    const [ruData, arData] = await Promise.all([
-        fetchJSON(CDN.bukhariRu),
-        fetchJSON(CDN.bukhariAr).catch(() => null)
-    ]);
-
-    onProgress?.("⚙️ Обработка хадисов...");
-
-    // Build Arabic lookup: hadithnumber → text
-    const arMap = new Map();
-    if (arData) {
-        const arSections = arData.hadiths || arData;
-        const indexAr = (list) => {
-            for (const h of list) {
-                const key = String(h.hadithnumber ?? h.hadithNumber ?? h.number ?? "");
-                if (key) arMap.set(key, h.text || h.body || "");
-            }
-        };
-        if (Array.isArray(arSections)) {
-            indexAr(arSections);
-        } else if (typeof arSections === "object") {
-            for (const sec of Object.values(arSections)) {
-                indexAr(Array.isArray(sec) ? sec : (sec.hadiths || []));
-            }
-        }
-    }
-
-    // Normalise Russian data
-    const hadiths = [];
-    const ruSections = ruData.hadiths || ruData;
-    const processList = (list) => {
-        for (const h of list) {
-            const num = String(h.hadithnumber ?? h.hadithNumber ?? h.number ?? hadiths.length + 1);
-            const ruText = h.text || h.body || "";
-            if (!ruText) continue;
-            hadiths.push({
-                id: `hb${num}`,
-                type: "hadith",
-                col: "Сахих аль-Бухари",
-                n: Number(num) || hadiths.length + 1,
-                nar: "",
-                grade: "сахих",
-                ar: arMap.get(num) || "",
-                ru: ruText,
-                tags: autoTags(ruText)
-            });
-        }
-    };
-
-    if (Array.isArray(ruSections)) {
-        processList(ruSections);
-    } else if (typeof ruSections === "object") {
-        for (const sec of Object.values(ruSections)) {
-            processList(Array.isArray(sec) ? sec : (sec.hadiths || []));
-        }
-    }
-
-    onProgress?.(`📜 Бухари: ${hadiths.length} хадисов ✓`);
-    return hadiths;
-}
-
-/** Load all data in parallel */
-async function loadAllData(onProgress) {
-    try {
-        const [quran, bukhari] = await Promise.all([
-            loadQuranData(onProgress),
-            loadBukhariData(onProgress)
-        ]);
-        QURAN_AYAHS = quran;
-        HADITHS = bukhari;
-        DATA_LOADED = true;
-        onProgress?.(`✅ Готово: ${quran.length} аятов + ${bukhari.length} хадисов`);
-        return true;
-    } catch (err) {
-        console.error("CDN load failed, using fallback:", err);
-        onProgress?.("⚠️ Ошибка загрузки — используем встроенную базу");
-        useFallbackData();
-        return false;
-    }
-}
-
-/** Minimal built-in corpus for offline use */
-function useFallbackData() {
-    QURAN_AYAHS = [
-        { id: "q4_135", type: "quran", surah: "ан-Ниса", num: "4:135", ar: "يَا أَيُّهَا الَّذِينَ آمَنُوا كُونُوا قَوَّامِينَ بِالْقِسْطِ شُهَدَاءَ لِلَّهِ", ru: "О те, которые уверовали! Будьте стойки в справедливости, свидетельствуя ради Аллаха, даже если это против вас самих.", tags: ["справедливость", "свидетельство", "честность"] },
-        { id: "q5_8", type: "quran", surah: "аль-Маида", num: "5:8", ar: "اعْدِلُوا هُوَ أَقْرَبُ لِلتَّقْوَىٰ", ru: "Будьте справедливы, ибо это ближе к богобоязненности.", tags: ["справедливость", "беспристрастность"] },
-        { id: "q16_90", type: "quran", surah: "ан-Нахль", num: "16:90", ar: "إِنَّ اللَّهَ يَأْمُرُ بِالْعَدْلِ وَالْإِحْسَانِ", ru: "Воистину, Аллах повелевает справедливость, благодеяние и щедрость к родственникам.", tags: ["справедливость", "благодеяние"] },
-        { id: "q49_12", type: "quran", surah: "аль-Худжурат", num: "49:12", ar: "اجْتَنِبُوا كَثِيرًا مِّنَ الظَّنِّ", ru: "Избегайте многих предположений, ибо некоторые предположения — грех. Не шпионьте и не злословьте.", tags: ["злословие", "подозрение", "сплетни"] },
-        { id: "q3_134", type: "quran", surah: "Аль Имран", num: "3:134", ar: "وَالْكَاظِمِينَ الْغَيْظَ وَالْعَافِينَ عَنِ النَّاسِ", ru: "Которые сдерживают гнев и прощают людей. Аллах любит творящих добро.", tags: ["прощение", "гнев", "терпение"] },
-    ];
-    HADITHS = [
-        { id: "hb1", type: "hadith", col: "Сахих аль-Бухари", n: 1, nar: "Умар ибн аль-Хаттаб", grade: "сахих", ar: "إِنَّمَا الأَعْمَالُ بِالنِّيَّاتِ", ru: "Поистине, дела оцениваются по намерениям.", tags: ["намерение", "дела", "искренность"] },
-        { id: "hb13", type: "hadith", col: "Сахих аль-Бухари", n: 13, nar: "Анас ибн Малик", grade: "сахих", ar: "لَا يُؤْمِنُ أَحَدُكُمْ حَتَّى يُحِبَّ لِأَخِيهِ مَا يُحِبُّ لِنَفْسِهِ", ru: "Не уверует никто из вас, пока не пожелает брату то, что желает себе.", tags: ["братство", "любовь", "вера"] },
-        { id: "hb6018", type: "hadith", col: "Сахих аль-Бухари", n: 6018, nar: "Абу Хурайра", grade: "сахих", ar: "مَنْ كَانَ يُؤْمِنُ بِاللَّهِ وَالْيَوْمِ الآخِرِ فَلْيَقُلْ خَيْرًا أَوْ لِيَصْمُتْ", ru: "Кто верит в Аллаха и Судный День, пусть говорит благое или молчит.", tags: ["речь", "молчание", "вера"] },
-    ];
-    DATA_LOADED = true;
-}
-
-// ═══════════════════════════════════════════════════════════════
-// STATIC KNOWLEDGE BASE — ETHICAL PRINCIPLES
-// ═══════════════════════════════════════════════════════════════
-
-const PRINCIPLES = [
-    {
-        id: "eu1", type: "principle", tradition: "Утилитаризм", title: "Принцип наибольшего счастья",
-        ru: "Действие является морально правильным, если оно приводит к наибольшему счастью для наибольшего числа людей.",
-        src: "Джереми Бентам", tags: ["счастье", "последствия", "польза", "большинство"]
+Далиль: «Воистину, молитва предписана верующим в определённое время» (Коран, 4:103).`,
+        sources: [
+            { title: "IslamQA — Столпы ислама", url: "https://islamqa.info/ru" },
+            { title: "Azan.ru — Намаз", url: "https://azan.ru/namaz" },
+        ]
     },
-    {
-        id: "eu2", type: "principle", tradition: "Утилитаризм", title: "Минимизация страдания",
-        ru: "Моральный долг состоит в том, чтобы минимизировать общее страдание, даже если это не максимизирует счастье.",
-        src: "Карл Поппер", tags: ["страдание", "вред", "минимизация", "последствия"]
+    "пост": {
+        keywords: ["пост", "ураза", "рамадан", "саум", "сухур", "ифтар", "разговение", "говеть"],
+        answer: `Пост в месяц Рамадан — один из пяти столпов ислама. Обязателен для каждого совершеннолетнего, здорового мусульманина.
+
+<strong>Основные положения:</strong>
+• Пост длится от рассвета (фаджр) до заката (магриб)
+• Запрещается: еда, питьё и супружеская близость
+• Суннат: сухур (предрассветная еда) и поспешность с ифтаром
+
+<strong>Кто освобождён от поста:</strong>
+• Больные, путники (с возмещением)
+• Беременные и кормящие (если есть угроза)
+• Пожилые, не способные поститься (выплачивают фидию)
+
+<div class="madhab-section">
+<span class="madhab-tag madhab-hanafi">Ханафитский</span> Если человек нарушил пост намеренно — обязана каффара: пост 60 дней подряд.
+</div>
+<div class="madhab-section">
+<span class="madhab-tag madhab-shafii">Шафиитский</span> Каффара обязательна только при намеренном половом акте в дневное время Рамадана.
+</div>
+
+Далиль: «О те, которые уверовали! Вам предписан пост, подобно тому, как он был предписан вашим предшественникам» (Коран, 2:183).`,
+        sources: [
+            { title: "IslamQA — Пост в Рамадан", url: "https://islamqa.info/ru" },
+            { title: "Azan.ru — Рамадан", url: "https://azan.ru/ramadan" },
+        ]
     },
-    {
-        id: "ed1", type: "principle", tradition: "Деонтология", title: "Категорический императив",
-        ru: "Поступай только согласно такой максиме, руководствуясь которой ты в то же время можешь пожелать, чтобы она стала всеобщим законом.",
-        src: "Иммануил Кант", tags: ["долг", "универсальность", "закон", "правило"]
+    "закят": {
+        keywords: ["закят", "закат", "милостыня", "садака", "нисаб", "десятина"],
+        answer: `Закят — обязательный ежегодный налог для мусульман, один из пяти столпов ислама.
+
+<strong>Условия обязательности:</strong>
+• Достижение нисаба (минимального порога богатства)
+• Прошёл полный лунный год владения
+• Нисаб золота: 85 г, серебра: 595 г
+• Размер: 2,5% от накоплений
+
+<strong>Кому выплачивается (8 категорий):</strong>
+Бедным, нуждающимся, собирающим закят, тем, чьи сердца привлечены к исламу, на освобождение рабов, должникам, на пути Аллаха, путникам.
+
+<div class="madhab-section">
+<span class="madhab-tag madhab-hanafi">Ханафитский</span> Закят не выплачивается с жилого дома и личных вещей. С торговых товаров — обязателен.
+</div>
+<div class="madhab-section">
+<span class="madhab-tag madhab-hanbali">Ханбалитский</span> Закят обязателен также с продуктов земледелия и скота при достижении нисаба.
+</div>
+
+Далиль: «И выполняйте молитву и выплачивайте закят» (Коран, 2:43).`,
+        sources: [
+            { title: "IslamQA — Закят", url: "https://islamqa.info/ru" },
+            { title: "IslamWeb — Закят", url: "https://islamweb.net" },
+        ]
     },
-    {
-        id: "ed2", type: "principle", tradition: "Деонтология", title: "Формула человечности",
-        ru: "Поступай так, чтобы ты всегда относился к человечеству — и в своём лице, и в лице всякого другого — как к цели, а не только как к средству.",
-        src: "Иммануил Кант", tags: ["достоинство", "уважение", "человек", "цель"]
+    "никах": {
+        keywords: ["никах", "брак", "свадьба", "женитьба", "замуж", "муж", "жена", "развод", "талак", "махр"],
+        answer: `Никах (брак) в исламе — это договор между мужчиной и женщиной, заключённый при свидетелях.
+
+<strong>Условия действительности никаха:</strong>
+• Согласие обеих сторон
+• Вали (опекун) невесты
+• Два свидетеля-мусульманина
+• Махр (свадебный дар невесте)
+• Отсутствие препятствий для брака
+
+<div class="madhab-section">
+<span class="madhab-tag madhab-hanafi">Ханафитский</span> Никах действителен без вали, если женщина совершеннолетняя и разумная.
+</div>
+<div class="madhab-section">
+<span class="madhab-tag madhab-shafii">Шафиитский</span> <span class="madhab-tag madhab-maliki">Маликитский</span> <span class="madhab-tag madhab-hanbali">Ханбалитский</span> Вали (опекун) является обязательным условием для действительности никаха.
+</div>
+
+Далиль: Пророк ﷺ сказал: «Нет никаха без опекуна» (Абу Дауд, ат-Тирмизи). Ханафиты считают этот хадис относящимся к малолетним.`,
+        sources: [
+            { title: "IslamQA — Брак в исламе", url: "https://islamqa.info/ru" },
+            { title: "Fatwa Online — Никах", url: "https://fatwaonline.net" },
+        ]
     },
-    {
-        id: "ed3", type: "principle", tradition: "Деонтология", title: "Принцип честности",
-        ru: "Ложь морально недопустима в любых обстоятельствах, поскольку она подрывает доверие и автономию другого человека.",
-        src: "Иммануил Кант", tags: ["честность", "ложь", "доверие", "правдивость"]
+    "еда": {
+        keywords: ["халяль", "харам", "еда", "пища", "мясо", "алкоголь", "свинина", "забой", "дозволенн"],
+        answer: `В исламе пища делится на халяль (дозволенную) и харам (запретную).
+
+<strong>Запрещено (харам):</strong>
+• Свинина и все продукты из неё
+• Мертвечина (не забитое по шариату)
+• Кровь
+• То, что забито не с именем Аллаха
+• Алкоголь и опьяняющие вещества
+• Хищные животные с клыками, хищные птицы с когтями
+
+<strong>Дозволено (халяль):</strong>
+• Мясо скота, забитого по шариату (тазкия)
+• Морепродукты
+• Овощи, фрукты, зерно
+
+<div class="madhab-section">
+<span class="madhab-tag madhab-hanafi">Ханафитский</span> Морские животные: дозволена только рыба. Креветки, крабы, кальмары — макрух или харам.
+</div>
+<div class="madhab-section">
+<span class="madhab-tag madhab-shafii">Шафиитский</span> <span class="madhab-tag madhab-maliki">Маликитский</span> <span class="madhab-tag madhab-hanbali">Ханбалитский</span> Все морепродукты — халяль.
+</div>
+
+Далиль: «Запрещена вам мертвечина, и кровь, и мясо свинины…» (Коран, 5:3).`,
+        sources: [
+            { title: "IslamQA — Халяль и харам", url: "https://islamqa.info/ru" },
+            { title: "Azan.ru — Халяльная пища", url: "https://azan.ru" },
+        ]
     },
-    {
-        id: "ev1", type: "principle", tradition: "Этика добродетели", title: "Золотая середина",
-        ru: "Добродетель — это середина между двумя крайностями: избытком и недостатком.",
-        src: "Аристотель", tags: ["умеренность", "добродетель", "баланс", "крайности"]
+    "тахарат": {
+        keywords: ["тахарат", "вуду", "омовение", "гусль", "купание", "наджаса", "чистота", "тайаммум", "таяммум"],
+        answer: `Тахарат (ритуальная чистота) — обязательное условие для совершения намаза.
+
+<strong>Малое омовение (вуду):</strong>
+1. Намерение
+2. Мытьё рук до запястий
+3. Полоскание рта
+4. Промывание носа
+5. Мытьё лица
+6. Мытьё рук до локтей
+7. Протирание головы
+8. Мытьё ног до щиколоток
+
+<strong>Что нарушает вуду:</strong>
+• Выход чего-либо из двух путей (мочеиспускание, газы и т.д.)
+• Сон лёжа
+• Потеря сознания
+
+<div class="madhab-section">
+<span class="madhab-tag madhab-hanafi">Ханафитский</span> Прикосновение к женщине НЕ нарушает вуду. Кровотечение нарушает.
+</div>
+<div class="madhab-section">
+<span class="madhab-tag madhab-shafii">Шафиитский</span> Прикосновение кожа-к-коже к противоположному полу (не-махрам) нарушает вуду. Кровотечение НЕ нарушает.
+</div>
+
+Далиль: «О те, которые уверовали! Когда вы встаёте на молитву, то мойте ваши лица и руки до локтей…» (Коран, 5:6).`,
+        sources: [
+            { title: "IslamQA — Вуду", url: "https://islamqa.info/ru" },
+            { title: "Azan.ru — Тахарат", url: "https://azan.ru" },
+        ]
     },
-    {
-        id: "ev2", type: "principle", tradition: "Этика добродетели", title: "Практическая мудрость",
-        ru: "Способность рассуждать правильно о том, что хорошо и полезно для человека, и действовать соответственно.",
-        src: "Аристотель", tags: ["мудрость", "рассуждение", "решение", "практика"]
+    "ипотека": {
+        keywords: ["ипотек", "кредит", "банк", "процент", "риба", "рассрочка", "ростовщич", "заём", "займ", "ссуда"],
+        answer: `Вопрос ипотеки и банковских процентов — один из самых обсуждаемых в современном фикхе.
+
+<strong>Общее положение:</strong>
+Риба (ростовщичество/проценты) строго запрещена в исламе. Это касается как получения, так и выплаты процентов.
+
+Далиль: «Аллах дозволил торговлю и запретил ростовщичество (риба)» (Коран, 2:275).
+
+<strong>Мнения учёных по ипотеке:</strong>
+
+<div class="madhab-section">
+<span class="madhab-tag madhab-consensus">Большинство учёных</span> Обычная процентная ипотека является харамом, так как содержит риба. Следует искать исламские альтернативы: мурабаха, иджара, мушарака.
+</div>
+
+<div class="madhab-section">
+<span class="madhab-tag madhab-hanafi">Некоторые ханафитские учёные</span> В ситуации крайней необходимости (дарура), когда нет другой возможности обеспечить жильё и нет исламских банков — некоторые учёные допускают это с условиями.
+</div>
+
+<strong>Рекомендации:</strong>
+• Ищите исламские финансовые продукты (мурабаха, иджара)
+• Если их нет — консультируйтесь с местным учёным
+• Вопрос дозволенности зависит от конкретных обстоятельств
+
+⚠️ <em>Это сложный вопрос, по которому мнения учёных расходятся. Рекомендуем обратиться к компетентному учёному для персональной фетвы.</em>`,
+        sources: [
+            { title: "IslamQA — Ипотека и исламские финансы", url: "https://islamqa.info/ru/answers/159213" },
+            { title: "IslamWeb — Риба", url: "https://islamweb.net" },
+        ]
     },
-    {
-        id: "el1", type: "principle", tradition: "Правовые нормы", title: "Презумпция невиновности",
-        ru: "Каждый считается невиновным, пока его вина не доказана в установленном законом порядке.",
-        src: "Всеобщая декларация прав человека, ст. 11", tags: ["невиновность", "суд", "справедливость", "закон"]
+    "хиджаб": {
+        keywords: ["хиджаб", "никаб", "покрытие", "аурат", "одежда", "платок", "покрывало"],
+        answer: `Хиджаб (покрытие) является обязательным по единогласному мнению учёных четырёх мазхабов.
+
+<strong>Аурат (части тела, которые нужно покрывать):</strong>
+
+<div class="madhab-section">
+<span class="madhab-tag madhab-hanafi">Ханафитский</span> <span class="madhab-tag madhab-maliki">Маликитский</span> <span class="madhab-tag madhab-shafii">Шафиитский</span> <span class="madhab-tag madhab-hanbali">Ханбалитский</span>
+Женщина обязана покрывать всё тело перед посторонними мужчинами, кроме лица и кистей рук.
+</div>
+
+<div class="madhab-section">
+<span class="madhab-tag madhab-hanbali">Ханбалитский (строгое мнение)</span> Некоторые ханбалитские учёные считают покрытие лица (никаб) обязательным.
+</div>
+
+<strong>Условия одежды:</strong>
+• Покрывает весь аурат
+• Не обтягивающая (не описывает формы тела)
+• Не прозрачная
+• Не является украшением сама по себе
+• Не похожа на одежду мужчин или кафиров
+
+Далиль: «Скажи верующим женщинам, чтобы они опускали свои взоры и оберегали свои половые органы. Пусть они не выставляют напоказ своих прикрас…» (Коран, 24:31).`,
+        sources: [
+            { title: "IslamQA — Хиджаб", url: "https://islamqa.info/ru" },
+            { title: "Свет Ислама — Хиджаб", url: "https://svetislama.com" },
+        ]
     },
-    {
-        id: "el2", type: "principle", tradition: "Правовые нормы", title: "Право на частную жизнь",
-        ru: "Никто не может подвергаться произвольному вмешательству в его личную и семейную жизнь.",
-        src: "Всеобщая декларация прав человека, ст. 12", tags: ["приватность", "частная жизнь", "семья", "права"]
-    },
-    {
-        id: "eg1", type: "principle", tradition: "Общий принцип", title: "Золотое правило нравственности",
-        ru: "Поступай с другими так, как хочешь, чтобы поступали с тобой.",
-        src: "Универсальный принцип", tags: ["золотое правило", "взаимность", "отношения", "эмпатия"]
-    },
-    {
-        id: "eg2", type: "principle", tradition: "Общий принцип", title: "Не навреди (primum non nocere)",
-        ru: "Первейшая обязанность — не причинять вреда. Прежде чем пытаться помочь, убедись, что твои действия не нанесут ущерба.",
-        src: "Гиппократ", tags: ["вред", "безопасность", "медицина", "осторожность"]
-    },
-];
+};
 
-// ═══════════════════════════════════════════════════════════════
-// SEARCH ENGINE (simple TF-IDF-like keyword matching)
-// ═══════════════════════════════════════════════════════════════
+// Topics for clarification
+const CLARIFICATION_TOPICS = {
+    general_fiqh: [
+        "Можете описать ситуацию подробнее?",
+        "Какой мазхаб вам ближе (ханафитский, маликитский, шафиитский, ханбалитский)?",
+    ],
+    financial: [
+        "В какой стране вы проживаете?",
+        "Есть ли исламские финансовые организации в вашем регионе?",
+    ],
+    worship: [
+        "К какому мазхабу вы относитесь?",
+    ],
+};
 
-function getAllEntries() {
-    const entries = [];
-    for (const a of QURAN_AYAHS) {
-        entries.push({
-            id: a.id, type: "quran", title: `Коран, сура «${a.surah}», аят ${a.num}`,
-            content: a.ru, arabic: a.ar, tags: a.tags, ref: `Сура ${a.num}`
-        });
+// ── Initialization ─────────────────────────────────────────────
+document.addEventListener("DOMContentLoaded", () => {
+    loadChats();
+    setupInput();
+    renderHistoryList();
+
+    // Load the most recent chat or start fresh
+    if (currentChatId && allChats[currentChatId]) {
+        restoreChat(currentChatId);
+    } else {
+        startNewChat();
     }
-    for (const h of HADITHS) {
-        entries.push({
-            id: h.id, type: "hadith", title: `${h.col}, №${h.n}` + (h.nar ? ` (${h.nar})` : ""),
-            content: h.ru, arabic: h.ar, tags: h.tags, ref: `${h.col}, №${h.n}`, grade: h.grade
-        });
-    }
-    for (const p of PRINCIPLES) {
-        entries.push({
-            id: p.id, type: "principle", title: `${p.tradition}: ${p.title}`,
-            content: p.ru, tags: p.tags, ref: p.src
-        });
-    }
-    return entries;
-}
-
-function searchKnowledge(query, topK = 8) {
-    const entries = getAllEntries();
-    const qWords = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
-    const scored = entries.map(e => {
-        const text = (e.content + " " + e.tags.join(" ")).toLowerCase();
-        let score = 0;
-        for (const w of qWords) {
-            if (text.includes(w)) score += 1;
-            for (const tag of e.tags) { if (tag.toLowerCase().includes(w)) score += 2; }
-        }
-        return { ...e, score };
-    });
-    scored.sort((a, b) => b.score - a.score);
-    return scored.filter(s => s.score > 0).slice(0, topK);
-}
-
-// ═══════════════════════════════════════════════════════════════
-// AGENT 1: ANALYST
-// ═══════════════════════════════════════════════════════════════
-
-const STAKEHOLDER_MARKERS = [
-    "я", "мы", "он", "она", "они", "коллега", "друг", "родители", "мать", "отец",
-    "брат", "сестра", "начальник", "руководитель", "клиент", "сотрудник", "партнёр",
-    "сосед", "ребёнок", "семья", "муж", "жена", "врач", "пациент", "учитель",
-    "ученик", "продавец", "покупатель", "компания", "организация", "общество", "человек"
-];
-
-function classifyRole(m) {
-    const fam = new Set(["родители", "мать", "отец", "брат", "сестра", "семья", "муж", "жена", "ребёнок"]);
-    const work = new Set(["коллега", "начальник", "руководитель", "клиент", "сотрудник", "компания", "организация"]);
-    const soc = new Set(["друг", "сосед", "общество", "партнёр", "человек"]);
-    const pro = new Set(["врач", "пациент", "учитель", "ученик", "продавец", "покупатель"]);
-    if (fam.has(m)) return "Семейная роль";
-    if (work.has(m)) return "Рабочая/деловая роль";
-    if (soc.has(m)) return "Социальная роль";
-    if (pro.has(m)) return "Профессиональная роль";
-    return "Участник ситуации";
-}
-
-function runAnalyst(situation) {
-    const logs = [];
-    const log = (a) => logs.push({ agent: "Агент-Аналитик", action: a, time: new Date().toISOString() });
-    log("Получена ситуация для анализа");
-    const tl = situation.toLowerCase();
-
-    // Stakeholders
-    const stakeholders = [];
-    const seen = new Set();
-    for (const m of STAKEHOLDER_MARKERS) {
-        if (tl.includes(m) && !seen.has(m)) {
-            seen.add(m);
-            stakeholders.push({ name: m.charAt(0).toUpperCase() + m.slice(1), role: classifyRole(m) });
-        }
-    }
-    if (!stakeholders.length) stakeholders.push({ name: "Автор ситуации", role: "Главное действующее лицо" });
-    log("Извлечены участники: " + stakeholders.length);
-
-    // Conflicts
-    const conflicts = [];
-    if (/но|однако|хотя|несмотря/.test(tl))
-        conflicts.push({ type: "Внутреннее противоречие", desc: "Присутствует противопоставление позиций.", sev: "Средний" });
-    if (/выбор|дилемма|\bили\b|либо/.test(tl))
-        conflicts.push({ type: "Дилемма выбора", desc: "Ситуация требует выбора между вариантами действий.", sev: "Высокий" });
-    if (/обман|ложь|скрыть|промолчать/.test(tl))
-        conflicts.push({ type: "Конфликт честности", desc: "Вопрос правдивости, сокрытия информации или обмана.", sev: "Высокий" });
-    if (/навредить|пострадает|нарушить|вред/.test(tl))
-        conflicts.push({ type: "Конфликт вреда", desc: "Ситуация может привести к причинению вреда.", sev: "Высокий" });
-    if (/простить|наказать|месть/.test(tl))
-        conflicts.push({ type: "Конфликт справедливости", desc: "Выбор между прощением и наказанием.", sev: "Средний" });
-    if (/не знаю|сомневаюсь|не уверен|как быть/.test(tl))
-        conflicts.push({ type: "Моральная неопределённость", desc: "Автор выражает неуверенность в правильности действий.", sev: "Средний" });
-    if (!conflicts.length)
-        conflicts.push({ type: "Неявный конфликт", desc: "Конфликтные элементы не выражены явно.", sev: "Низкий" });
-    log("Выявлены конфликты: " + conflicts.length);
-
-    // Consequences
-    const consequences = [];
-    for (const s of stakeholders.slice(0, 3)) {
-        consequences.push({
-            who: s.name,
-            pos: `Решение в пользу ${s.name.toLowerCase()} может укрепить отношения и доверие.`,
-            neg: `Игнорирование интересов ${s.name.toLowerCase()} может ухудшить отношения.`
-        });
-    }
-    for (const c of conflicts) {
-        if (c.type === "Конфликт честности")
-            consequences.push({ who: "Все стороны", pos: "Честность укрепит долгосрочное доверие.", neg: "Правда может временно вызвать боль." });
-        if (c.type === "Конфликт вреда")
-            consequences.push({ who: "Все стороны", pos: "Предотвращение вреда защитит уязвимые стороны.", neg: "Бездействие может привести к серьёзному вреду." });
-    }
-    log("Смоделированы последствия");
-
-    const ctxt = conflicts.map(c => c.type.toLowerCase()).join(", ");
-    const summary = `Ситуация затрагивает ${stakeholders.length} участник(ов). Выявлено ${conflicts.length} конфликтный(х) элемент(ов): ${ctxt}. Рекомендуется рассмотреть интересы всех сторон.`;
-
-    return {
-        summary, stakeholders, conflicts, consequences, logs,
-        note: "Это структурный анализ ситуации. Он не содержит моральных оценок."
-    };
-}
-
-// ═══════════════════════════════════════════════════════════════
-// AGENT 2: VALUES INTERPRETER
-// ═══════════════════════════════════════════════════════════════
-
-function runValues(situation, analystResult) {
-    const logs = [];
-    const log = (a) => logs.push({ agent: "Агент-Интерпретатор", action: a, time: new Date().toISOString() });
-    log("Начат поиск релевантных ценностей");
-
-    let query = situation;
-    for (const c of analystResult.conflicts) query += " " + c.desc;
-    log("Построен поисковый запрос");
-
-    const results = searchKnowledge(query, 10);
-    log("Найдено источников: " + results.length);
-
-    // Group by type
-    const groups = { quran: { label: "📖 Священный Коран", items: [] }, hadith: { label: "📜 Хадисы Пророка ﷺ", items: [] }, principle: { label: "⚖️ Этические принципы", items: [] } };
-    for (const r of results) {
-        const item = { title: r.title, content: r.content, ref: r.ref, score: r.score };
-        if (r.arabic) item.arabic = r.arabic;
-        if (r.grade) item.grade = r.grade;
-        if (groups[r.type]) groups[r.type].items.push(item);
-    }
-    const filteredGroups = {};
-    for (const [k, v] of Object.entries(groups)) { if (v.items.length) filteredGroups[k] = v; }
-
-    // Interpretations
-    const interps = [];
-    if (filteredGroups.quran) {
-        interps.push({
-            perspective: "Коранический взгляд",
-            desc: `Найдено ${filteredGroups.quran.items.length} релевантных аятов. Тексты Корана призывают к размышлению, подчёркивая справедливость, милосердие и ответственность.`,
-            note: "Интерпретация аятов может различаться в зависимости от контекста и школы тафсира."
-        });
-    }
-    if (filteredGroups.hadith) {
-        interps.push({
-            perspective: "Пророческая традиция (Сунна)",
-            desc: `Найдено ${filteredGroups.hadith.items.length} релевантных хадисов. Пророческая традиция даёт практические примеры нравственного поведения.`,
-            note: "Каждый хадис имеет степень достоверности и контекст передачи."
-        });
-    }
-    if (filteredGroups.principle) {
-        const traditions = [...new Set(filteredGroups.principle.items.map(i => i.title.split(":")[0].trim()))];
-        interps.push({
-            perspective: "Философско-этический взгляд",
-            desc: `Ситуация рассматривается с позиций: ${traditions.join(", ")}. Различные традиции могут давать разные рекомендации.`,
-            note: "Философские принципы дополняют, но не заменяют религиозные источники."
-        });
-    }
-    if (!interps.length) {
-        interps.push({ perspective: "Общее замечание", desc: "По данной ситуации не найдено высокорелевантных источников.", note: "Рекомендуется консультация со специалистом." });
-    }
-    log("Сформированы интерпретации: " + interps.length);
-
-    return {
-        sources: filteredGroups, interpretations: interps, logs,
-        note: "Приведённые источники представляют различные точки зрения. Система не выносит директивных указаний."
-    };
-}
-
-// ═══════════════════════════════════════════════════════════════
-// AGENT 3: REFLECTION
-// ═══════════════════════════════════════════════════════════════
-
-function runReflection(situation, analystResult, valuesResult) {
-    const logs = [];
-    const log = (a) => logs.push({ agent: "Агент-Рефлексии", action: a, time: new Date().toISOString() });
-    log("Начат этап рефлексии");
-    const tl = situation.toLowerCase();
-
-    // Intention questions
-    const iq = [
-        { q: "Какова ваша главная мотивация в этой ситуации?", p: "Понять истинные намерения помогает отделить эмоции от рациональных соображений." },
-        { q: "Если бы никто не узнал о вашем решении, поступили бы вы так же?", p: "Помогает оценить, движет ли вами внутреннее убеждение или внешнее давление." },
-    ];
-    if (analystResult.stakeholders.length > 1)
-        iq.push({ q: "Чьи интересы для вас наиболее важны и почему?", p: "Определение приоритетов между заинтересованными сторонами." });
-    if (/скрыть|обман|ложь|промолчать/.test(tl))
-        iq.push({ q: "Что именно вы хотите защитить, скрывая информацию? Себя или другого?", p: "Различение защитной лжи и эгоистичного обмана." });
-    if (/простить|наказать|месть/.test(tl))
-        iq.push({ q: "Ваше желание — восстановить справедливость или ответить на боль?", p: "Различение стремления к справедливости и мести." });
-    log("Вопросы о намерениях: " + iq.length);
-
-    // Consequence questions
-    const cq = [
-        { q: "Как ваше решение повлияет на ситуацию через неделю? Через год? Через десять лет?", p: "Краткосрочные и долгосрочные последствия могут сильно различаться." },
-        { q: "Кто, кроме непосредственных участников, может быть затронут вашим решением?", p: "Последствия часто распространяются шире, чем кажется." },
-        { q: "Какой из выявленных рисков для вас наименее допустим?", p: "Определение красных линий помогает сузить пространство решений." },
-        { q: "Если бы вы узнали о подобном решении другого человека, как бы вы его оценили?", p: "Взгляд со стороны открывает новые перспективы." },
-    ];
-    log("Вопросы о последствиях: " + cq.length);
-
-    // Value questions
-    const vq = [
-        { q: "Какие из ваших жизненных ценностей наиболее затронуты этой ситуацией?", p: "Осознание собственной системы ценностей помогает принять согласованное решение." },
-    ];
-    if (valuesResult.sources.quran)
-        vq.push({ q: "Какой из приведённых аятов Корана наиболее резонирует с вашим ощущением ситуации?", p: "Личная связь с текстом может подсказать направление размышления." });
-    if (valuesResult.sources.hadith)
-        vq.push({ q: "Какой пример из жизни Пророка ﷺ приходит вам на ум в связи с этой ситуацией?", p: "Пророческие примеры дают практические ориентиры." });
-    vq.push({ q: "Если бы вы объясняли своё решение человеку, которого уважаете больше всего — что бы вы сказали?", p: "Мысленный эксперимент проверяет решение на внутреннюю честность." });
-    log("Вопросы о ценностях: " + vq.length);
-
-    // Meta questions
-    const mq = [
-        { q: "Достаточно ли у вас информации для принятия решения, или нужно узнать что-то ещё?", p: "Иногда моральная неопределённость — следствие недостатка информации." },
-        { q: "Есть ли давление времени, или вы можете позволить себе подумать?", p: "Срочность влияет на качество этического решения." },
-        { q: "С кем из близких или мудрых людей вы могли бы обсудить эту ситуацию?", p: "Совет (шура) — важная часть принятия значимых решений." },
-    ];
-    log("Рефлексия завершена");
-
-    return {
-        intentionQ: iq, consequenceQ: cq, valueQ: vq, metaQ: mq, logs,
-        note: "Эти вопросы предназначены для размышления. Не существует единственно «правильного» ответа. Цель — помочь вам глубже понять свои мотивы и возможные последствия."
-    };
-}
-
-// ═══════════════════════════════════════════════════════════════
-// PIPELINE & UI
-// ═══════════════════════════════════════════════════════════════
-
-document.addEventListener("DOMContentLoaded", async () => {
-    const statsEl = document.getElementById("stats-info");
-    const btnEl = document.getElementById("analyze-btn");
-    btnEl.disabled = true;
-
-    // Show loading progress in stats badge
-    const onProgress = (msg) => { statsEl.textContent = msg; };
-
-    await loadAllData(onProgress);
-
-    // Remove loading indicator
-    const dotEl = document.querySelector(".badge-dot");
-    if (dotEl) dotEl.classList.remove("badge-loading");
-
-    // Update stats
-    const entries = getAllEntries();
-    const qc = entries.filter(e => e.type === "quran").length;
-    const hc = entries.filter(e => e.type === "hadith").length;
-    const pc = entries.filter(e => e.type === "principle").length;
-    statsEl.textContent = `База: ${entries.length} источников — ${qc} аятов, ${hc} хадисов, ${pc} принципов`;
-    btnEl.disabled = false;
-
-    // Character counter
-    const ta = document.getElementById("situation-input");
-    const counter = document.getElementById("char-count");
-    ta.addEventListener("input", () => { counter.textContent = ta.value.length + " символов"; });
 });
 
-function analyzeSubmit() {
-    if (!DATA_LOADED) { alert("Данные ещё загружаются, подождите..."); return; }
-    const ta = document.getElementById("situation-input");
-    const btn = document.getElementById("analyze-btn");
-    const situation = ta.value.trim();
-    if (situation.length < 10) { alert("Опишите ситуацию подробнее (минимум 10 символов)."); ta.focus(); return; }
+function setupInput() {
+    const input = document.getElementById("chat-input");
 
-    btn.classList.add("loading"); btn.disabled = true;
+    // Auto-resize textarea
+    input.addEventListener("input", () => {
+        input.style.height = "auto";
+        input.style.height = Math.min(input.scrollHeight, 120) + "px";
+    });
 
-    setTimeout(() => {
-        try {
-            const analyst = runAnalyst(situation);
-            const values = runValues(situation, analyst);
-            const reflection = runReflection(situation, analyst, values);
-            const allLogs = [...analyst.logs, ...values.logs, ...reflection.logs];
-
-            // Disclaimer
-            const disc = document.getElementById("disclaimer");
-            document.getElementById("disclaimer-text").textContent =
-                "⚠️ Данный анализ предназначен для помощи в размышлении и НЕ ЯВЛЯЕТСЯ окончательным моральным суждением. Система не заменяет вашу совесть, консультацию с учёными или юридическую помощь. Финальное решение всегда остаётся за вами.";
-            disc.style.display = "flex";
-
-            document.getElementById("results-section").style.display = "flex";
-            renderAnalyst(analyst);
-            renderValues(values);
-            renderReflection(reflection);
-            renderLogs(allLogs);
-
-            document.getElementById("results-section").scrollIntoView({ behavior: "smooth", block: "start" });
-        } catch (e) { alert("Ошибка: " + e.message); }
-        finally { btn.classList.remove("loading"); btn.disabled = false; }
-    }, 300);
-}
-
-function esc(s) { if (!s) return ""; const d = document.createElement("div"); d.textContent = String(s); return d.innerHTML; }
-
-// ── Render Analyst ──────────────────────────────────────────────
-function renderAnalyst(data) {
-    const body = document.getElementById("analyst-body");
-    let h = "";
-    h += `<div class="sub-section"><div class="sub-title">📊 Резюме</div><p style="font-size:.88rem;color:var(--text-secondary);line-height:1.6">${esc(data.summary)}</p></div>`;
-
-    h += `<div class="sub-section"><div class="sub-title">👥 Участники</div><div class="stakeholder-list">`;
-    for (const s of data.stakeholders) h += `<div class="stakeholder-chip"><span>${esc(s.name)}</span><span class="stakeholder-role">· ${esc(s.role)}</span></div>`;
-    h += `</div></div>`;
-
-    h += `<div class="sub-section"><div class="sub-title">⚡ Конфликтные элементы</div>`;
-    for (const c of data.conflicts) h += `<div class="conflict-item"><div class="conflict-type">${esc(c.type)}</div><div class="conflict-desc">${esc(c.desc)}</div><span class="conflict-severity">${esc(c.sev)}</span></div>`;
-    h += `</div>`;
-
-    h += `<div class="sub-section"><div class="sub-title">🔮 Потенциальные последствия</div>`;
-    for (const c of data.consequences) h += `<div class="consequence-item"><div class="consequence-stakeholder">${esc(c.who)}</div><div class="consequence-row consequence-positive">✅ ${esc(c.pos)}</div><div class="consequence-row consequence-negative">⚠️ ${esc(c.neg)}</div></div>`;
-    h += `</div>`;
-
-    h += `<div class="agent-note">ℹ️ ${esc(data.note)}</div>`;
-    body.innerHTML = h;
-}
-
-// ── Render Values ───────────────────────────────────────────────
-function renderValues(data) {
-    const body = document.getElementById("values-body");
-    let h = "";
-    for (const [key, group] of Object.entries(data.sources)) {
-        h += `<div class="source-group"><div class="source-group-label">${esc(group.label)}</div>`;
-        for (const item of group.items) {
-            h += `<div class="source-item"><div class="source-title">${esc(item.title)}</div>`;
-            if (item.arabic) h += `<div class="source-arabic">${esc(item.arabic)}</div>`;
-            h += `<div class="source-content">${esc(item.content)}</div><div style="margin-top:6px"><span class="source-reference">${esc(item.ref)}</span>`;
-            if (item.grade) h += ` <span class="source-authenticity">${esc(item.grade)}</span>`;
-            h += ` <span class="source-relevance">совпадений: ${item.score}</span></div></div>`;
+    // Send on Enter (Shift+Enter for newline)
+    input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            sendMessage();
         }
-        h += `</div>`;
-    }
-
-    h += `<div class="sub-section"><div class="sub-title">🔍 Различные интерпретации</div>`;
-    for (const i of data.interpretations)
-        h += `<div class="interpretation-item"><div class="interpretation-perspective">${esc(i.perspective)}</div><div class="interpretation-desc">${esc(i.desc)}</div><div class="interpretation-note">💡 ${esc(i.note)}</div></div>`;
-    h += `</div>`;
-
-    h += `<div class="agent-note">ℹ️ ${esc(data.note)}</div>`;
-    body.innerHTML = h;
+    });
 }
 
-// ── Render Reflection ───────────────────────────────────────────
-function renderReflection(data) {
-    const body = document.getElementById("reflection-body");
-    let h = "";
-    const cats = [
-        { key: "intentionQ", icon: "🎯", title: "Вопросы о намерениях" },
-        { key: "consequenceQ", icon: "🔮", title: "Вопросы о последствиях" },
-        { key: "valueQ", icon: "💎", title: "Вопросы о ценностях" },
-        { key: "metaQ", icon: "🧠", title: "Метарефлексия" },
+// ── LocalStorage Persistence ───────────────────────────────────
+function loadChats() {
+    try {
+        const data = localStorage.getItem(STORAGE_KEY);
+        if (data) {
+            const parsed = JSON.parse(data);
+            allChats = parsed.chats || {};
+            currentChatId = parsed.currentChatId || null;
+        }
+    } catch (e) {
+        console.error("Failed to load chats:", e);
+        allChats = {};
+        currentChatId = null;
+    }
+}
+
+function saveChats() {
+    try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({
+            chats: allChats,
+            currentChatId: currentChatId,
+        }));
+    } catch (e) {
+        console.error("Failed to save chats:", e);
+    }
+}
+
+function generateId() {
+    return Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+}
+
+// ── Chat Management ────────────────────────────────────────────
+function startNewChat() {
+    const id = generateId();
+    allChats[id] = {
+        id: id,
+        title: "Новый чат",
+        messages: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+    };
+    currentChatId = id;
+    saveChats();
+    clearChatUI();
+    renderHistoryList();
+}
+
+function switchToChat(chatId) {
+    if (!allChats[chatId]) return;
+    currentChatId = chatId;
+    saveChats();
+    restoreChat(chatId);
+    renderHistoryList();
+    toggleHistory(); // close sidebar
+}
+
+function deleteChat(chatId, event) {
+    event.stopPropagation();
+    delete allChats[chatId];
+
+    if (chatId === currentChatId) {
+        const keys = Object.keys(allChats);
+        if (keys.length > 0) {
+            currentChatId = keys[keys.length - 1];
+            restoreChat(currentChatId);
+        } else {
+            startNewChat();
+        }
+    }
+
+    saveChats();
+    renderHistoryList();
+}
+
+function clearAllHistory() {
+    if (!confirm("Удалить всю историю чатов?")) return;
+    allChats = {};
+    currentChatId = null;
+    startNewChat();
+    saveChats();
+    renderHistoryList();
+}
+
+function restoreChat(chatId) {
+    clearChatUI();
+    const chat = allChats[chatId];
+    if (!chat) return;
+
+    const container = document.getElementById("chat-messages");
+    chat.messages.forEach(msg => {
+        appendMessageToUI(msg.role, msg.html, false);
+    });
+    scrollToBottom();
+}
+
+function clearChatUI() {
+    const container = document.getElementById("chat-messages");
+    // Keep welcome message
+    container.innerHTML = `
+        <div class="message bot-message">
+            <div class="message-avatar">🤖</div>
+            <div class="message-content">
+                <div class="message-text">
+                    Ассаламу алейкум! 👋<br><br>
+                    Задайте вопрос по исламскому праву, и я найду ответ в проверенных источниках.<br><br>
+                    <span class="hint-text">Ответы могут содержать мнения разных мазхабов:
+                    <span class="madhab-tag madhab-hanafi">Ханафитский</span>
+                    <span class="madhab-tag madhab-maliki">Маликитский</span>
+                    <span class="madhab-tag madhab-shafii">Шафиитский</span>
+                    <span class="madhab-tag madhab-hanbali">Ханбалитский</span>
+                    </span>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+// ── History Sidebar ────────────────────────────────────────────
+function toggleHistory() {
+    const sidebar = document.getElementById("history-sidebar");
+    const overlay = document.getElementById("sidebar-overlay");
+    sidebar.classList.toggle("open");
+    overlay.classList.toggle("open");
+}
+
+function renderHistoryList() {
+    const list = document.getElementById("history-list");
+    const sortedChats = Object.values(allChats)
+        .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+
+    if (sortedChats.length === 0) {
+        list.innerHTML = '<div class="history-empty">История пуста</div>';
+        return;
+    }
+
+    list.innerHTML = sortedChats.map(chat => {
+        const isActive = chat.id === currentChatId;
+        const date = new Date(chat.updatedAt);
+        const dateStr = formatDate(date);
+        return `
+            <div class="history-item ${isActive ? 'active' : ''}" onclick="switchToChat('${chat.id}')">
+                <div class="history-item-icon">💬</div>
+                <div class="history-item-text">
+                    <div class="history-item-title">${escapeHtml(chat.title)}</div>
+                    <div class="history-item-date">${dateStr}</div>
+                </div>
+                <button class="history-item-delete" onclick="deleteChat('${chat.id}', event)" title="Удалить">🗑</button>
+            </div>
+        `;
+    }).join("");
+}
+
+function formatDate(date) {
+    const now = new Date();
+    const diffMs = now - date;
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+
+    if (diffMins < 1) return "Только что";
+    if (diffMins < 60) return `${diffMins} мин. назад`;
+    if (diffHours < 24) return `${diffHours} ч. назад`;
+    if (diffDays < 7) return `${diffDays} дн. назад`;
+    return date.toLocaleDateString("ru-RU", { day: "numeric", month: "short" });
+}
+
+// ── Message Handling ───────────────────────────────────────────
+async function sendMessage() {
+    if (isProcessing) return;
+
+    const input = document.getElementById("chat-input");
+    const text = input.value.trim();
+    if (!text) return;
+
+    // Clear input
+    input.value = "";
+    input.style.height = "auto";
+
+    // Add user message
+    addMessage("user", text);
+
+    // Process
+    isProcessing = true;
+    document.getElementById("send-btn").disabled = true;
+    showTyping();
+
+    // Simulate processing delay for natural feel
+    await sleep(800 + Math.random() * 700);
+
+    // Generate response
+    const response = await generateResponse(text);
+
+    hideTyping();
+    addMessage("bot", response);
+
+    isProcessing = false;
+    document.getElementById("send-btn").disabled = false;
+    input.focus();
+}
+
+function addMessage(role, content) {
+    const html = role === "user" ? escapeHtml(content) : content;
+
+    // Save to chat history
+    if (currentChatId && allChats[currentChatId]) {
+        allChats[currentChatId].messages.push({ role, html, text: content });
+        allChats[currentChatId].updatedAt = new Date().toISOString();
+
+        // Update title from first user message
+        if (role === "user" && allChats[currentChatId].title === "Новый чат") {
+            allChats[currentChatId].title = content.substring(0, 60) + (content.length > 60 ? "…" : "");
+        }
+
+        saveChats();
+        renderHistoryList();
+    }
+
+    appendMessageToUI(role, html, true);
+}
+
+function appendMessageToUI(role, html, animate) {
+    const container = document.getElementById("chat-messages");
+    const msgDiv = document.createElement("div");
+    msgDiv.className = `message ${role === "user" ? "user-message" : "bot-message"}`;
+    if (!animate) msgDiv.style.animation = "none";
+
+    msgDiv.innerHTML = `
+        <div class="message-avatar">${role === "user" ? "👤" : "🤖"}</div>
+        <div class="message-content">
+            <div class="message-text">${html}</div>
+        </div>
+    `;
+
+    container.appendChild(msgDiv);
+    scrollToBottom();
+}
+
+function showTyping() {
+    document.getElementById("typing-indicator").style.display = "flex";
+    scrollToBottom();
+}
+
+function hideTyping() {
+    document.getElementById("typing-indicator").style.display = "none";
+}
+
+function scrollToBottom() {
+    const container = document.getElementById("chat-messages");
+    setTimeout(() => {
+        container.scrollTop = container.scrollHeight;
+    }, 50);
+}
+
+// ── Response Generation ────────────────────────────────────────
+async function generateResponse(userText) {
+    const textLower = userText.toLowerCase();
+
+    // 1. Check if it's a greeting
+    if (isGreeting(textLower)) {
+        return generateGreeting();
+    }
+
+    // 2. Check knowledge base for matching topic
+    const matchedTopic = findMatchingTopic(textLower);
+
+    if (matchedTopic) {
+        return formatFiqhAnswer(matchedTopic);
+    }
+
+    // 3. If the question is too vague, ask for clarification
+    if (textLower.length < 15) {
+        return generateClarification(textLower);
+    }
+
+    // 4. Try to search and generate a general answer
+    return generateGeneralAnswer(userText, textLower);
+}
+
+function isGreeting(text) {
+    const greetings = [
+        "салам", "ассалам", "здравствуйте", "привет", "добрый",
+        "салям", "мархаба", "ас-саляму", "wa alaikum"
     ];
-    for (const cat of cats) {
-        const qs = data[cat.key] || [];
-        if (!qs.length) continue;
-        h += `<div class="question-category"><div class="question-category-title">${cat.icon} ${cat.title}</div>`;
-        for (const q of qs) h += `<div class="question-item"><div class="question-text">${esc(q.q)}</div><div class="question-purpose">${esc(q.p)}</div></div>`;
-        h += `</div>`;
-    }
-    h += `<div class="agent-note">ℹ️ ${esc(data.note)}</div>`;
-    body.innerHTML = h;
+    return greetings.some(g => text.includes(g)) && text.length < 60;
 }
 
-// ── Render Logs ─────────────────────────────────────────────────
-function renderLogs(logs) {
-    const c = document.getElementById("logs-container");
-    let h = "";
-    for (const l of logs) {
-        const t = l.time ? new Date(l.time).toLocaleTimeString("ru-RU") : "";
-        h += `<div class="log-entry"><span class="log-time">${esc(t)}</span><span class="log-agent">${esc(l.agent)}</span><span class="log-action">${esc(l.action)}</span></div>`;
-    }
-    c.innerHTML = h || '<p style="color:var(--text-muted);font-size:.8rem">Нет записей</p>';
+function generateGreeting() {
+    const greetings = [
+        "Ва алейкум ассалам ва рахматуллахи ва баракятух! 🌙<br><br>Чем могу помочь? Задайте вопрос по исламскому праву.",
+        "Ва алейкум ассалам! 🌙<br><br>Рад помочь. Какой у вас вопрос по фикху?",
+    ];
+    return greetings[Math.floor(Math.random() * greetings.length)];
 }
 
-function toggleLogs() {
-    const b = document.getElementById("meta-body");
-    const t = document.getElementById("meta-toggle");
-    const open = b.style.display !== "none";
-    b.style.display = open ? "none" : "block";
-    t.classList.toggle("open", !open);
+function findMatchingTopic(textLower) {
+    let bestMatch = null;
+    let bestScore = 0;
+
+    for (const [topicKey, topic] of Object.entries(FIQH_KNOWLEDGE)) {
+        let score = 0;
+        for (const keyword of topic.keywords) {
+            if (textLower.includes(keyword)) {
+                score += keyword.length; // longer matches weigh more
+            }
+        }
+        if (score > bestScore) {
+            bestScore = score;
+            bestMatch = topic;
+        }
+    }
+
+    return bestScore >= 3 ? bestMatch : null;
+}
+
+function formatFiqhAnswer(topic) {
+    let html = `<div class="fiqh-answer">${topic.answer}</div>`;
+
+    // Add sources
+    if (topic.sources && topic.sources.length > 0) {
+        html += `<div class="source-links">`;
+        html += `<div class="source-links-title">📚 Источники</div>`;
+        topic.sources.forEach(src => {
+            html += `<a class="source-link" href="${src.url}" target="_blank" rel="noopener">${src.title}</a>`;
+        });
+        html += `</div>`;
+    }
+
+    return html;
+}
+
+function generateClarification(textLower) {
+    return `Пожалуйста, опишите ваш вопрос подробнее, чтобы я мог дать точный ответ. Например:
+
+<ul class="clarification-list">
+<li>Какую конкретно тему фикха затрагивает ваш вопрос?</li>
+<li>Есть ли конкретная ситуация, с которой вы столкнулись?</li>
+<li>Интересует ли вас мнение конкретного мазхаба?</li>
+</ul>
+
+Примеры вопросов:
+• «Как правильно совершать намаз?»
+• «Допустима ли ипотека в исламе?»
+• «Какие правила поста в Рамадан?»`;
+}
+
+function generateGeneralAnswer(userText, textLower) {
+    // Detect madhabs mentioned in the text
+    const detectedMadhabs = detectMadhabs(textLower);
+
+    // Build a search-like response based on keywords
+    let answer = "";
+
+    // Check common categories
+    if (containsAny(textLower, ["дуа", "молитва", "зикр", "поминан"])) {
+        answer = generateDuaAnswer(textLower);
+    } else if (containsAny(textLower, ["запрет", "харам", "грех", "можно ли", "дозволен", "разрешен"])) {
+        answer = generateHalalHaramAnswer(userText, textLower);
+    } else if (containsAny(textLower, ["смерть", "похорон", "джаназа", "кладбищ", "умер"])) {
+        answer = generateFuneralAnswer(textLower);
+    } else if (containsAny(textLower, ["хадж", "умра", "паломнич", "мекк", "кааб"])) {
+        answer = generateHajjAnswer(textLower);
+    } else if (containsAny(textLower, ["работ", "бизнес", "торговл", "заработ"])) {
+        answer = generateBusinessAnswer(textLower);
+    } else {
+        answer = generateFallbackAnswer(userText, detectedMadhabs);
+    }
+
+    return answer;
+}
+
+function generateDuaAnswer(textLower) {
+    return `<strong>Дуа (мольба/поминание)</strong><br><br>
+
+Дуа — это обращение к Аллаху с просьбой. Дуа можно делать на любом языке и в любое время, однако есть особые моменты, когда дуа принимается с большей вероятностью:
+
+• После обязательного намаза
+• В последнюю треть ночи
+• Между азаном и икамой
+• В день Арафа
+• В пятницу в определённый час
+• Во время дождя
+
+<div class="arabic-quote">رَبَّنَا آتِنَا فِي الدُّنْيَا حَسَنَةً وَفِي الْآخِرَةِ حَسَنَةً وَقِنَا عَذَابَ النَّارِ</div>
+
+«Господь наш! Даруй нам в этом мире добро и в Последней жизни добро, и защити нас от мучений Огня» (Коран, 2:201).
+
+<div class="source-links">
+<div class="source-links-title">📚 Источники</div>
+<a class="source-link" href="https://islamqa.info/ru" target="_blank">IslamQA — Дуа</a>
+<a class="source-link" href="https://azan.ru" target="_blank">Azan.ru — Зикр и дуа</a>
+</div>`;
+}
+
+function generateHalalHaramAnswer(userText, textLower) {
+    return `По вашему вопросу: «${escapeHtml(userText)}»<br><br>
+
+В исламском фикхе действия делятся на пять категорий (ахкам):
+
+<strong>1. Фард/Ваджиб</strong> — обязательное (намаз, закят, пост)
+<strong>2. Мустахаб/Сунна</strong> — желательное (сунна-намазы, садака)
+<strong>3. Мубах</strong> — дозволенное (обычные дела)
+<strong>4. Макрух</strong> — нежелательное (расточительство)
+<strong>5. Харам</strong> — запретное (алкоголь, риба, ложь)
+
+Чтобы дать точный ответ именно на ваш вопрос, уточните, пожалуйста:
+<ul class="clarification-list">
+<li>О каком конкретном действии или вещи идёт речь?</li>
+<li>Есть ли особые обстоятельства?</li>
+</ul>
+
+<div class="source-links">
+<div class="source-links-title">📚 Рекомендуемые источники</div>
+<a class="source-link" href="https://islamqa.info/ru" target="_blank">IslamQA — Поиск фетв</a>
+<a class="source-link" href="https://islamweb.net" target="_blank">IslamWeb — Фетвы</a>
+</div>`;
+}
+
+function generateFuneralAnswer(textLower) {
+    return `<strong>Джаназа (похоронные обряды)</strong><br><br>
+
+Порядок действий при смерти мусульманина:
+
+<strong>1. Гусль (омовение покойного)</strong>
+Тело омывается нечётное количество раз (обычно 3) с водой и сидром (лотосом).
+
+<strong>2. Кафан (саван)</strong>
+Мужчина заворачивается в 3 куска белой ткани, женщина — в 5.
+
+<strong>3. Джаназа-намаз (заупокойная молитва)</strong>
+4 такбира (без поклонов и суджудов).
+
+<strong>4. Дафн (погребение)</strong>
+Покойного укладывают на правый бок лицом к кибле.
+
+<div class="madhab-section">
+<span class="madhab-tag madhab-hanafi">Ханафитский</span> При джаназа-намазе — суна читать дуа-санаа после первого такбира, салават после второго, дуа за покойного после третьего.
+</div>
+
+<div class="source-links">
+<div class="source-links-title">📚 Источники</div>
+<a class="source-link" href="https://islamqa.info/ru" target="_blank">IslamQA — Джаназа</a>
+<a class="source-link" href="https://azan.ru" target="_blank">Azan.ru — Похоронный обряд</a>
+</div>`;
+}
+
+function generateHajjAnswer(textLower) {
+    return `<strong>Хадж и Умра</strong><br><br>
+
+Хадж — пятый столп ислама, обязателен один раз в жизни для каждого, кто имеет физическую и финансовую возможность.
+
+<strong>Столпы (рукны) хаджа:</strong>
+1. Ихрам (намерение и вхождение в состояние ихрама)
+2. Стояние на Арафате (9 зуль-хиджа)
+3. Таваф аль-ифада (обход Каабы)
+4. Саи между Сафой и Марвой
+
+<strong>Виды хаджа:</strong>
+• Ифрад — только хадж
+• Таматту — умра + хадж (с перерывом)
+• Киран — умра + хадж (без перерыва)
+
+<div class="madhab-section">
+<span class="madhab-tag madhab-hanafi">Ханафитский</span> Предпочтительный вид хаджа — Киран.
+</div>
+<div class="madhab-section">
+<span class="madhab-tag madhab-shafii">Шафиитский</span> <span class="madhab-tag madhab-hanbali">Ханбалитский</span> Предпочтительный вид — Таматту.
+</div>
+
+<div class="source-links">
+<div class="source-links-title">📚 Источники</div>
+<a class="source-link" href="https://islamqa.info/ru" target="_blank">IslamQA — Хадж</a>
+<a class="source-link" href="https://islamweb.net" target="_blank">IslamWeb — Обряды хаджа</a>
+</div>`;
+}
+
+function generateBusinessAnswer(textLower) {
+    return `<strong>Бизнес и торговля в исламе</strong><br><br>
+
+Торговля дозволена и поощряется в исламе: «Аллах дозволил торговлю и запретил ростовщичество» (Коран, 2:275).
+
+<strong>Основные правила:</strong>
+• Запрет риба (процентов/ростовщичества)
+• Запрет гарар (чрезмерной неопределённости)
+• Запрет торговли харамом (алкоголь, свинина и т.д.)
+• Честность и отсутствие обмана
+• Обязательное выполнение договоров
+
+<strong>Дозволенные виды заработка:</strong>
+• Торговля халяль-товарами
+• Оказание услуг
+• Земледелие
+• Партнёрство (мушарака, мудараба)
+
+⚠️ <em>Для конкретных вопросов о бизнесе опишите, пожалуйста, подробности вашей ситуации.</em>
+
+<div class="source-links">
+<div class="source-links-title">📚 Источники</div>
+<a class="source-link" href="https://islamqa.info/ru" target="_blank">IslamQA — Торговля</a>
+<a class="source-link" href="https://islamweb.net" target="_blank">IslamWeb — Исламские финансы</a>
+</div>`;
+}
+
+function generateFallbackAnswer(userText, detectedMadhabs) {
+    const searchQuery = encodeURIComponent(userText);
+
+    // Build search links for fiqh portals
+    const searchLinks = FIQH_SOURCES.slice(0, 4).map(src => {
+        const url = `https://www.google.com/search?q=site:${src.domain}+${searchQuery}`;
+        return `<a class="source-link" href="${url}" target="_blank">${src.name} — поиск по вашему вопросу</a>`;
+    }).join("");
+
+    return `Спасибо за вопрос: «${escapeHtml(userText)}»<br><br>
+
+По данному вопросу рекомендую обратиться к следующим проверенным источникам, где вы найдёте подробные ответы учёных:
+
+<div class="source-links">
+<div class="source-links-title">📚 Поиск ответа в проверенных источниках</div>
+${searchLinks}
+</div>
+
+<br>Также вы можете задать мне более конкретный вопрос, например:
+<ul class="clarification-list">
+<li>Вопросы о намазе, посте, закяте, хадже</li>
+<li>Вопросы о браке (никах), разводе</li>
+<li>Вопросы о халяль и харам (еда, финансы)</li>
+<li>Вопросы об одежде и хиджабе</li>
+<li>Вопросы о тахарате (омовении)</li>
+</ul>`;
+}
+
+// ── Helpers ─────────────────────────────────────────────────────
+function detectMadhabs(text) {
+    const found = [];
+    for (const [key, keywords] of Object.entries(MADHAB_KEYWORDS)) {
+        if (keywords.some(kw => text.includes(kw))) {
+            found.push(key);
+        }
+    }
+    return found;
+}
+
+function containsAny(text, keywords) {
+    return keywords.some(kw => text.includes(kw));
+}
+
+function escapeHtml(text) {
+    const div = document.createElement("div");
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
