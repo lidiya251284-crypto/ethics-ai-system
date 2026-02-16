@@ -332,3 +332,8 @@ const FIQH_DB = [
 📖 Хадис Муслим №2735, Тирмизи №3477.`
     }
 ];
+
+// Node.js compatibility
+if (typeof module !== "undefined" && module.exports) {
+    module.exports = FIQH_DB;
+}
