@@ -1,0 +1,25 @@
+{
+  "name": "ethics-ai-system",
+  "version": "1.0.0",
+  "description": "Фикх-Помощник — AI-ассистент по исламскому праву",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lidiya251284-crypto/ethics-ai-system.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/lidiya251284-crypto/ethics-ai-system/issues"
+  },
+  "homepage": "https://github.com/lidiya251284-crypto/ethics-ai-system#readme",
+  "dependencies": {
+    "express": "^5.2.1"
+  }
+}

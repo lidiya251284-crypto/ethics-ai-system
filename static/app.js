@@ -1,9 +1,8 @@
 /* ═══════════════════════════════════════════════════════════════
-   Фикх-Помощник — Chat Engine v6 (Offline — Smart Match)
+   Фикх-Помощник — Chat Engine v7 (Node.js + Groq AI)
    
-   • Нет API, нет сервера — всё работает из файла
-   • Нечёткий поиск по ключевым словам + морфология
-   • 28+ вопросов с мнениями 4 мазхабов и далилями
+   • Отправка через /api/chat (сервер → Groq → Llama 3.3)
+   • Сохранение/ввод API-ключа через /api/set-key
    • История чатов в localStorage
    ═══════════════════════════════════════════════════════════════ */
 
@@ -12,7 +11,7 @@ let currentChatId = null, allChats = {}, isProcessing = false;
 
 // ── Init ───────────────────────────────────────────────────────
 document.addEventListener("DOMContentLoaded", () => {
-    loadChats(); setupInput(); renderHistoryList();
+    loadChats(); setupInput(); renderHistoryList(); checkApiKey();
     if (currentChatId && allChats[currentChatId]?.messages.length > 0) restoreChat(currentChatId);
     else startNewChat();
 });
@@ -21,6 +20,35 @@ function setupInput() {
     const inp = document.getElementById("chat-input");
     inp.addEventListener("input", () => { inp.style.height = "auto"; inp.style.height = Math.min(inp.scrollHeight, 120) + "px"; });
     inp.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } });
+}
+
+async function checkApiKey() {
+    try {
+        const r = await fetch("/api/status");
+        const d = await r.json();
+        if (!d.has_key) document.getElementById("api-key-banner").style.display = "block";
+    } catch (e) {
+        document.getElementById("api-key-banner").style.display = "block";
+    }
+}
+
+async function saveKey() {
+    const input = document.getElementById("api-key-input");
+    const status = document.getElementById("key-status");
+    const key = input.value.trim();
+    if (!key) { status.textContent = "Введите ключ"; status.style.display = "block"; return; }
+
+    status.textContent = "⏳ Сохраняю..."; status.style.display = "block";
+    try {
+        const r = await fetch("/api/set-key", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key }) });
+        const d = await r.json();
+        if (d.status === "ok") {
+            status.textContent = "✅ Ключ сохранён!"; status.style.color = "#22c55e";
+            setTimeout(() => { document.getElementById("api-key-banner").style.display = "none"; }, 1500);
+        } else {
+            status.textContent = "❌ " + d.message; status.style.color = "#fbbf24";
+        }
+    } catch (e) { status.textContent = "❌ Ошибка соединения с сервером"; status.style.color = "#ef4444"; }
 }
 
 // ── Storage ────────────────────────────────────────────────────
@@ -38,7 +66,7 @@ function clearChatUI() {
     document.getElementById("chat-messages").innerHTML = `
         <div class="message bot-message" style="animation:none"><div class="message-avatar">🤖</div>
         <div class="message-content"><div class="message-text">
-            Ассаламу алейкум! 👋<br><br>Задайте <strong>любой вопрос</strong> по фикху.<br><br>
+            Ассаламу алейкум! 👋<br><br>Я — <strong>Фикх-Помощник</strong> на основе AI.<br>Задайте мне <strong>любой вопрос</strong> по исламскому праву.<br><br>
             <span class="hint-text">
             <span class="madhab-tag madhab-hanafi">Ханафитский</span>
             <span class="madhab-tag madhab-maliki">Маликитский</span>
@@ -72,15 +100,12 @@ async function sendMessage() {
     const text = inp.value.trim(); if (!text) return;
     inp.value = ""; inp.style.height = "auto";
     addMessage("user", text);
-    isProcessing = true; document.getElementById("send-btn").disabled = true;
-    showTyping();
+    isProcessing = true; document.getElementById("send-btn").disabled = true; showTyping();
 
-    // Simulate thinking delay
-    await new Promise(r => setTimeout(r, 400 + Math.random() * 600));
+    let response;
+    try { response = await callBackend(text); } catch (e) { response = "❌ " + (e.message || "Ошибка соединения"); }
 
-    const response = findAnswer(text);
-    hideTyping();
-    addMessage("bot", response);
+    hideTyping(); addMessage("bot", response);
     isProcessing = false; document.getElementById("send-btn").disabled = false; inp.focus();
 }
 
@@ -105,107 +130,40 @@ function showTyping() { document.getElementById("typing-indicator").style.displa
 function hideTyping() { document.getElementById("typing-indicator").style.display = "none"; }
 function scrollToBottom() { const c = document.getElementById("chat-messages"); setTimeout(() => c.scrollTop = c.scrollHeight, 50); }
 
-// ── Smart Matching Engine ──────────────────────────────────────
-const STEMS = {
-    "молитв": "намаз", "молить": "намаз", "салят": "намаз", "салат": "намаз", "намаз": "намаз",
-    "омовен": "вуду", "абдест": "вуду", "тахар": "вуду", "вуду": "вуду", "вуз": "вуду",
-    "пост": "пост", "ураз": "пост", "саум": "пост", "сухур": "пост", "ифтар": "пост", "рамадан": "пост",
-    "развод": "развод", "талак": "развод", "разводит": "развод", "хульг": "развод",
-    "муж": "муж", "жен": "жена", "жена": "жена", "содержа": "нафака", "содержит": "нафака", "нафак": "нафака", "работ": "работа",
-    "закят": "закят", "милостын": "закят", "нисаб": "закят",
-    "хиджаб": "хиджаб", "покрыти": "хиджаб", "никаб": "хиджаб", "плат": "хиджаб", "аурат": "хиджаб",
-    "процент": "риба", "кредит": "риба", "ипотек": "риба", "банк": "риба", "риба": "риба", "ростовщ": "риба",
-    "гусль": "гусль", "большо": "гусль", "полно": "гусль", "джанаб": "гусль", "купан": "гусль",
-    "никах": "никах", "брак": "никах", "свадьб": "никах", "женить": "никах", "замуж": "никах", "махр": "никах",
-    "халяль": "халяль", "харам": "халяль", "свинин": "халяль", "еда": "халяль", "мяс": "халяль", "алкоголь": "халяль",
-    "таяммум": "таяммум", "песок": "таяммум", "сухо": "таяммум",
-    "пропущен": "каза", "каза": "каза", "возмещен": "каза",
-    "беременн": "беременность", "кормящ": "беременность",
-    "музык": "музыка", "песн": "музыка", "нашид": "музыка", "кальян": "курение",
-    "путник": "сафар", "путешеств": "сафар", "сафар": "сафар", "сокращен": "сафар",
-    "похорон": "джаназа", "джаназа": "джаназа", "мёртв": "джаназа", "умер": "джаназа", "смерт": "джаназа",
-    "сглаз": "рукъя", "порч": "рукъя", "джинн": "рукъя", "рукъя": "рукъя", "колдов": "рукъя", "сихр": "рукъя",
-    "борода": "борода", "брить": "борода", "бритв": "борода",
-    "курени": "курение", "курить": "курение", "сигарет": "курение", "вейп": "курение", "табак": "курение",
-    "фото": "фото", "фотограф": "фото", "изображен": "фото", "рисова": "фото", "рисун": "фото",
-    "хадж": "хадж", "умр": "хадж", "мекк": "хадж", "кааб": "хадж", "паломнич": "хадж",
-    "истихар": "истихара", "выбор": "истихара",
-    "собак": "животные", "кошк": "животные", "животн": "животные",
-    "суджуд": "суджуд", "сахв": "суджуд", "ошибк": "суджуд", "забыл": "суджуд",
-    "дуа": "дуа", "мольб": "дуа", "просить": "дуа",
-    "приветств": "приветствие", "салям": "приветствие", "салам": "приветствие", "алейкум": "приветствие", "привет": "приветствие", "здравств": "приветствие",
-    "месячн": "месячные", "менструац": "месячные", "хайд": "месячные",
-};
+// ── Backend Call ───────────────────────────────────────────────
+async function callBackend(userMessage) {
+    const chat = allChats[currentChatId];
+    const history = chat ? chat.messages.slice(-20).map(m => ({ role: m.role, text: m.text })) : [];
 
-// Build topic → DB index mapping
-const TOPIC_MAP = {};
-FIQH_DB.forEach((entry, idx) => {
-    entry.keys.forEach(k => {
-        const topic = k.toLowerCase();
-        if (!TOPIC_MAP[topic]) TOPIC_MAP[topic] = [];
-        TOPIC_MAP[topic].push(idx);
+    const resp = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: userMessage, history, session_id: currentChatId }),
     });
-});
-
-function normalize(text) {
-    return text.toLowerCase().replace(/[?!.,;:\-—–«»"'()]/g, " ").replace(/\s+/g, " ").trim();
+    const data = await resp.json();
+    if (data.status === "error") return "⚠️ " + (data.message || "Ошибка сервера");
+    return md2html(data.message || "");
 }
 
-function findAnswer(query) {
-    const norm = normalize(query);
-    const words = norm.split(" ").filter(w => w.length > 2);
-
-    if (words.length === 0) return "Пожалуйста, задайте вопрос по исламскому праву (фикху). Например: <em>«Как делать омовение?»</em>";
-
-    // Score each DB entry
-    const scores = new Array(FIQH_DB.length).fill(0);
-
-    for (const word of words) {
-        // 1. Direct key match
-        for (let i = 0; i < FIQH_DB.length; i++) {
-            for (const key of FIQH_DB[i].keys) {
-                if (key.includes(word) || word.includes(key)) {
-                    scores[i] += 3;
-                }
-            }
-        }
-
-        // 2. Stem-based match
-        for (const [stem, topic] of Object.entries(STEMS)) {
-            if (word.startsWith(stem) || stem.startsWith(word.substring(0, Math.min(word.length, 4)))) {
-                // Find entries matching this topic
-                for (let i = 0; i < FIQH_DB.length; i++) {
-                    for (const key of FIQH_DB[i].keys) {
-                        if (key.includes(topic) || topic.includes(key)) {
-                            scores[i] += 2;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Find best match
-    let bestIdx = -1, bestScore = 0;
-    for (let i = 0; i < scores.length; i++) {
-        if (scores[i] > bestScore) { bestScore = scores[i]; bestIdx = i; }
-    }
-
-    if (bestScore >= 3 && bestIdx >= 0) {
-        const entry = FIQH_DB[bestIdx];
-        return `<strong>${entry.title}</strong><br><br>${entry.answer}`;
-    }
-
-    // No match — suggest search + show topics
-    const topics = FIQH_DB.map(e => e.title).filter(t => t !== "Приветствие! 👋");
-    const topicList = topics.slice(0, 10).map(t => `• ${t}`).join("<br>");
-    const searchQ = encodeURIComponent(query + " фикх исламское право");
-
-    return `К сожалению, я не нашёл точного ответа на ваш вопрос в базе знаний.<br><br>
-<strong>Попробуйте:</strong><br>
-🔍 <a href="https://www.google.com/search?q=${searchQ}" target="_blank" style="color:#14b8a6">Поиск в Google</a><br>
-🔍 <a href="https://islamqa.info/ru/search?q=${encodeURIComponent(query)}" target="_blank" style="color:#14b8a6">Поиск на IslamQA</a><br><br>
-<strong>Или спросите по одной из этих тем:</strong><br>${topicList}<br>... и ещё ${topics.length - 10} тем.`;
+// ── Markdown → HTML ────────────────────────────────────────────
+function md2html(text) {
+    let h = text;
+    h = h.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+    h = h.replace(/^### (.+)$/gm, '<br><strong>$1</strong>');
+    h = h.replace(/^## (.+)$/gm, '<br><strong style="font-size:1.05em">$1</strong>');
+    h = h.replace(/^# (.+)$/gm, '<br><strong style="font-size:1.1em">$1</strong>');
+    h = h.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
+    h = h.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    h = h.replace(/\*(.+?)\*/g, '<em>$1</em>');
+    h = h.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener" style="color:#14b8a6">$1</a>');
+    h = h.replace(/^[-*] (.+)$/gm, '• $1');
+    h = h.replace(/^\d+\.\s+(.+)$/gm, '• $1');
+    h = h.replace(/\**(Ханафитский мазхаб|По ханафитскому мазхабу|Ханафиты)\**:?/gi, '<span class="madhab-tag madhab-hanafi">Ханафитский</span>');
+    h = h.replace(/\**(Маликитский мазхаб|По маликитскому мазхабу|Маликиты)\**:?/gi, '<span class="madhab-tag madhab-maliki">Маликитский</span>');
+    h = h.replace(/\**(Шафиитский мазхаб|По шафиитскому мазхабу|Шафииты)\**:?/gi, '<span class="madhab-tag madhab-shafii">Шафиитский</span>');
+    h = h.replace(/\**(Ханбалитский мазхаб|По ханбалитскому мазхабу|Ханбалиты)\**:?/gi, '<span class="madhab-tag madhab-hanbali">Ханбалитский</span>');
+    h = h.replace(/\n\n/g, '<br><br>'); h = h.replace(/\n/g, '<br>');
+    return h;
 }
 
 function esc(t) { const d = document.createElement("div"); d.textContent = t; return d.innerHTML; }
