@@ -834,3 +834,182 @@ body {
         width: 280px;
     }
 }
+
+/* ── Settings Modal ─────────────────────────────────────────── */
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 2000;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+
+.modal-overlay.open {
+    display: flex;
+}
+
+.modal-card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-glass);
+    border-radius: var(--radius-lg);
+    width: 100%;
+    max-width: 440px;
+    animation: messageIn 0.3s ease-out;
+}
+
+.modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border-glass);
+}
+
+.modal-header h3 {
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+.modal-body {
+    padding: 20px;
+}
+
+.setting-label {
+    display: block;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 6px;
+}
+
+.setting-hint {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    margin-bottom: 12px;
+    line-height: 1.4;
+}
+
+.setting-hint a {
+    color: var(--accent-teal);
+    text-decoration: none;
+}
+
+.setting-hint a:hover {
+    text-decoration: underline;
+}
+
+.api-key-input-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.api-key-input {
+    flex: 1;
+    padding: 10px 14px;
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid var(--border-glass);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-family: var(--font-main);
+    font-size: 0.85rem;
+}
+
+.api-key-input:focus {
+    outline: none;
+    border-color: var(--accent-green);
+}
+
+.toggle-vis-btn {
+    width: 40px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-glass);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 1rem;
+}
+
+.save-key-btn {
+    width: 100%;
+    padding: 10px;
+    background: var(--gradient-header);
+    border: none;
+    border-radius: var(--radius-sm);
+    color: white;
+    font-family: var(--font-main);
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.save-key-btn:hover {
+    opacity: 0.9;
+    transform: translateY(-1px);
+}
+
+.key-status {
+    margin-top: 10px;
+    font-size: 0.8rem;
+    text-align: center;
+    min-height: 20px;
+}
+
+.key-status.success {
+    color: var(--accent-green);
+}
+
+.key-status.error {
+    color: var(--accent-rose);
+}
+
+/* ── API Banner ─────────────────────────────────────────────── */
+.api-banner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    margin-bottom: 12px;
+    background: rgba(245, 158, 11, 0.1);
+    border: 1px solid rgba(245, 158, 11, 0.25);
+    border-radius: var(--radius-md);
+    font-size: 0.82rem;
+    color: var(--accent-amber);
+    animation: fadeInDown 0.5s ease-out;
+}
+
+.api-banner.hidden {
+    display: none;
+}
+
+.api-banner button {
+    margin-left: auto;
+    padding: 5px 14px;
+    background: rgba(245, 158, 11, 0.2);
+    border: 1px solid rgba(245, 158, 11, 0.4);
+    border-radius: 14px;
+    color: var(--accent-amber);
+    font-family: var(--font-main);
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: var(--transition);
+}
+
+.api-banner button:hover {
+    background: rgba(245, 158, 11, 0.3);
+}
+
+/* ── Madhab section spacing ─────────────────────────────────── */
+.madhab-section {
+    margin: 8px 0;
+    padding: 8px 12px;
+    background: rgba(255, 255, 255, 0.02);
+    border-radius: var(--radius-sm);
+    border-left: 3px solid var(--border-glass);
+}
