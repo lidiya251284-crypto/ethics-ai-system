@@ -1,125 +1,92 @@
 <!DOCTYPE html>
-<html lang="ru" dir="ltr">
+<html lang="ru">
 
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="Фикх-Помощник — AI-ассистент по исламскому праву.">
-    <title>Фикх-Помощник — Исламское право</title>
+    <title>Фикх-Помощник</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link
-        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Amiri:wght@400;700&display=swap"
-        rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css">
 </head>
 
 <body>
-    <div class="bg-decoration">
-        <div class="bg-orb bg-orb-1"></div>
-        <div class="bg-orb bg-orb-2"></div>
-        <div class="bg-orb bg-orb-3"></div>
-    </div>
 
     <!-- Setup Modal -->
-    <div class="modal-overlay" id="setup-modal" style="display:none;">
-        <div class="modal-card" style="max-width:460px; padding:24px;">
-            <h2 style="margin:0 0 8px; font-size:1.3em;">⚙️ Настройка AI</h2>
-            <p style="margin:0 0 16px; opacity:0.7; font-size:0.9em;">Выберите провайдер и введите API-ключ</p>
-
-            <div id="provider-list" style="display:flex; flex-direction:column; gap:8px; margin-bottom:16px;"></div>
-
-            <div id="key-input-area" style="display:none;">
-                <label style="font-size:0.85em; font-weight:500; display:block; margin-bottom:6px;"
-                    id="key-label">API-ключ:</label>
-                <input type="text" id="setup-key-input" placeholder="Вставьте API-ключ..."
-                    style="width:100%; padding:10px 12px; border-radius:8px; border:1px solid rgba(255,255,255,0.2); background:rgba(0,0,0,0.3); color:white; font-size:14px; box-sizing:border-box; margin-bottom:8px;">
-                <p id="setup-link" style="font-size:0.8em; margin:0 0 12px; opacity:0.7;"></p>
-                <button onclick="submitSetup()" id="setup-submit-btn"
-                    style="width:100%; padding:10px; border-radius:8px; border:none; background:#14b8a6; color:white; cursor:pointer; font-weight:600; font-size:14px;">
-                    ✅ Проверить и сохранить
-                </button>
-                <p id="setup-status" style="font-size:0.85em; margin:8px 0 0; text-align:center; display:none;"></p>
+    <div class="modal-overlay" id="setup-modal">
+        <div class="modal-card">
+            <h2>⚙️ Настройка AI</h2>
+            <p class="modal-desc">Выберите провайдер и введите API-ключ</p>
+            <div id="provider-list"></div>
+            <div id="key-input-area" class="hidden">
+                <label id="key-label">API-ключ:</label>
+                <input type="text" id="setup-key-input" placeholder="Вставьте API-ключ...">
+                <p id="setup-link" class="caption"></p>
+                <button onclick="submitSetup()" id="setup-submit-btn" class="btn-accent">✅ Проверить и
+                    сохранить</button>
+                <p id="setup-status" class="caption hidden"></p>
             </div>
-
-            <button onclick="closeSetup()"
-                style="margin-top:12px; width:100%; padding:8px; border-radius:8px; border:1px solid rgba(255,255,255,0.15); background:transparent; color:rgba(255,255,255,0.6); cursor:pointer; font-size:13px;">Закрыть</button>
+            <button onclick="closeSetup()" class="btn-ghost">Закрыть</button>
         </div>
     </div>
 
-    <!-- History Sidebar -->
-    <aside class="history-sidebar" id="history-sidebar">
-        <div class="sidebar-header">
-            <h3>📋 История</h3>
-            <button class="sidebar-close-btn" onclick="toggleHistory()">✕</button>
-        </div>
-        <button class="new-chat-btn" onclick="startNewChat()">
-            <span>＋</span> Новый чат
-        </button>
-        <div class="history-list" id="history-list"></div>
-        <div class="sidebar-footer">
-            <button class="clear-history-btn" onclick="clearAllHistory()">🗑 Очистить всё</button>
-        </div>
-    </aside>
-    <div class="sidebar-overlay" id="sidebar-overlay" onclick="toggleHistory()"></div>
-
-    <div class="app-container">
-        <header class="app-header">
-            <div class="header-top-row">
-                <button class="history-toggle-btn" onclick="toggleHistory()" title="История чатов">
-                    <span>📋</span>
-                </button>
-                <div class="header-center">
-                    <div class="header-icon">☪️</div>
-                    <h1>Фикх-Помощник</h1>
-                    <p class="header-subtitle" id="header-subtitle">AI-ассистент</p>
-                </div>
-                <button class="history-toggle-btn" onclick="openSetup()" title="Настройки AI">
-                    <span>⚙️</span>
-                </button>
+    <!-- Layout -->
+    <div class="layout">
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-top">
+                <span class="sidebar-logo">☪️ Фикх</span>
+                <button class="sidebar-close" id="sidebar-close" onclick="toggleSidebar()">✕</button>
             </div>
-        </header>
+            <button class="btn-new-chat" onclick="startNewChat()">+ Новый чат</button>
+            <div class="chat-list" id="history-list"></div>
+            <div class="sidebar-bottom">
+                <button class="btn-settings" onclick="openSetup()">⚙️ Настройки AI</button>
+                <span class="caption" id="provider-label"></span>
+            </div>
+        </aside>
+        <div class="sidebar-overlay" id="sidebar-overlay" onclick="toggleSidebar()"></div>
 
-        <div class="chat-container glass-card">
-            <div class="chat-messages" id="chat-messages">
-                <div class="message bot-message">
-                    <div class="message-avatar">🤖</div>
-                    <div class="message-content">
-                        <div class="message-text">
-                            Ассаламу алейкум! 👋<br><br>
-                            Я — <strong>Фикх-Помощник</strong> на основе AI.<br>
-                            Задайте мне <strong>любой вопрос</strong> по исламскому праву.<br><br>
-                            <span class="hint-text">
-                                <span class="madhab-tag madhab-hanafi">Ханафитский</span>
-                                <span class="madhab-tag madhab-maliki">Маликитский</span>
-                                <span class="madhab-tag madhab-shafii">Шафиитский</span>
-                                <span class="madhab-tag madhab-hanbali">Ханбалитский</span>
-                            </span>
-                        </div>
+        <!-- Main -->
+        <main class="main">
+            <div class="main-header" id="main-header">
+                <button class="btn-menu" onclick="toggleSidebar()">☰</button>
+                <span class="main-title">Фикх-Помощник</span>
+            </div>
+
+            <div class="messages" id="chat-messages">
+                <div class="message bot">
+                    <div class="message-bubble">
+                        Ассаламу алейкум! 👋<br><br>
+                        Я — <strong>Фикх-Помощник</strong>. Задайте вопрос по исламскому праву.<br><br>
+                        <span class="caption">
+                            <span class="tag tag-h">Ханафитский</span>
+                            <span class="tag tag-m">Маликитский</span>
+                            <span class="tag tag-s">Шафиитский</span>
+                            <span class="tag tag-b">Ханбалитский</span>
+                        </span>
                     </div>
                 </div>
             </div>
 
-            <div class="typing-indicator" id="typing-indicator" style="display:none;">
-                <div class="message-avatar">🤖</div>
-                <div class="typing-dots">
-                    <span></span><span></span><span></span>
+            <div class="typing" id="typing-indicator">
+                <div class="typing-dots"><span></span><span></span><span></span></div>
+            </div>
+
+            <div class="input-area">
+                <div class="input-box">
+                    <textarea id="chat-input" placeholder="Задайте вопрос по фикху..." rows="1"
+                        maxlength="2000"></textarea>
+                    <button id="send-btn" class="btn-send" onclick="sendMessage()">➤</button>
                 </div>
+                <p class="caption input-hint">Для серьёзных вопросов обращайтесь к учёному-алиму</p>
             </div>
-
-            <div class="chat-input-area">
-                <textarea id="chat-input" placeholder="Задайте вопрос по фикху..." rows="1" maxlength="2000"></textarea>
-                <button id="send-btn" class="send-btn" onclick="sendMessage()">
-                    <span class="send-icon">➤</span>
-                </button>
-            </div>
-        </div>
-
-        <footer class="app-footer">
-            <p>Для серьёзных вопросов обращайтесь к учёному-алиму.</p>
-        </footer>
+        </main>
     </div>
 
+    <script src="/static/fiqh_db.js"></script>
     <script src="/static/app.js"></script>
 </body>
 
