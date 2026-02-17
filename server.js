@@ -86,6 +86,9 @@ const STEM_MAP = {
     "тасбих": "зикр", "зикр": "зикр", "азкар": "зикр", "четк": "зикр", "поминани": "зикр",
     "гадалк": "гадание", "гороскоп": "гадание", "астрологи": "гадание", "гадани": "гадание", "ясновидящ": "гадание",
     "выбор": "выборы", "голосован": "выборы", "демократи": "выборы", "политик": "выборы",
+    "возмещени пост": "пропущенные посты", "пропустила пост": "пропущенные посты", "каза пост": "пропущенные посты",
+    "месячные пост": "пропущенные посты", "месячные рамадан": "пропущенные посты", "пост месячн": "пропущенные посты",
+    "хайд пост": "пропущенные посты", "возместить пост": "пропущенные посты",
 };
 
 function searchOfflineDB(query) {
@@ -98,13 +101,25 @@ function searchOfflineDB(query) {
     for (const entry of FIQH_DB) {
         let score = 0;
 
-        // Direct key match
         for (const key of entry.keys) {
             const normKey = normalizeText(key);
+            const keyWords = normKey.split(" ").filter(w => w.length > 2);
+
+            // Exact substring match in query
             if (normalized.includes(normKey)) {
-                score += 3;
+                score += keyWords.length >= 2 ? keyWords.length * 5 : 3;
             }
-            // Partial match
+            // Multi-word key: check if ALL key words appear in query (non-adjacent)
+            else if (keyWords.length >= 2) {
+                const allFound = keyWords.every(kw =>
+                    words.some(qw => qw.includes(kw) || kw.includes(qw))
+                );
+                if (allFound) {
+                    score += keyWords.length * 4;
+                }
+            }
+
+            // Partial word match
             for (const word of words) {
                 if (normKey.includes(word) || word.includes(normKey)) {
                     score += 1;
@@ -124,6 +139,7 @@ function searchOfflineDB(query) {
                     }
                 }
             }
+
         }
 
         if (score > bestScore) {
