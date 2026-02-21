@@ -220,7 +220,8 @@ const SYSTEM_PROMPT = `Ты — учёный-факих (специалист п
 4. Если вопрос неоднозначный — рекомендуй обратиться к учёному.
 5. Отвечай структурировано: **жирный**, списки, подзаголовки.
 6. Арабские термины давай с переводом.
-7. Будь объективен — не навязывай один мазхаб.`;
+7. Будь объективен — не навязывай один мазхаб.
+8. Давай ГЛУБОКИЕ, развернутые ответы. Поясняй логику (илля) и причины постановлений. Избегай кратких отписок.`;
 
 // ── Load config from .env ──────────────────────────────────────
 function loadConfig() {
@@ -303,78 +304,66 @@ async function testProvider(provider, key) {
     return result;
 }
 
-// ── Routes ──────────────────────────────────────────────────
-app.get("/", (req, res) => {
-    res.sendFile(path.join(__dirname, "index.html"));
-});
-
-app.get("/api/status", (req, res) => {
-    const configured = !!(activeProvider && apiKey);
-    res.json({
-        status: "ok",
-        configured,
-        provider: activeProvider,
-        providerName: configured ? PROVIDERS[activeProvider]?.name : null,
-        model: configured ? PROVIDERS[activeProvider]?.model : null,
-        providers: Object.entries(PROVIDERS).map(([id, p]) => ({
-            id, name: p.name, description: p.description, signupUrl: p.signupUrl
-        }))
-    });
-});
-
-app.post("/api/setup", async (req, res) => {
-    const { provider, key } = req.body;
-    if (!provider || !PROVIDERS[provider]) {
-        return res.json({ status: "error", message: "Неверный провайдер" });
-    }
-    if (!key || key.length < 10) {
-        return res.json({ status: "error", message: "Введите API-ключ" });
-    }
-
-    console.log(`  🔑 Проверяю ключ для ${PROVIDERS[provider].name}...`);
-    const test = await testProvider(provider, key);
-
-    if (test.ok) {
-        saveConfig(provider, key);
-        console.log(`  ✅ ${PROVIDERS[provider].name} — работает!`);
-        res.json({ status: "ok", message: `✅ ${PROVIDERS[provider].name} настроен!`, providerName: PROVIDERS[provider].name });
-    } else {
-        console.log(`  ❌ ${PROVIDERS[provider].name} — ошибка:`, test.message);
-        res.json({ status: "error", message: test.message });
-    }
-});
-
 app.post("/api/chat", async (req, res) => {
     const { message, history } = req.body;
     if (!message) return res.json({ status: "error", message: "Пустое сообщение" });
 
-    // Step 1: Try offline database first (free, instant)
+    // Step 1: Search offline database
     const offlineResult = searchOfflineDB(message);
-    if (offlineResult) {
-        console.log(`  📚 Оффлайн: "${offlineResult.title}"`);
-        const response = `<strong>${offlineResult.title}</strong><br><br>${offlineResult.answer}<br><br><em style="opacity:0.6">📚 Ответ из базы знаний (бесплатно)</em>`;
-        return res.json({ status: "ok", message: response, source: "offline" });
-    }
+    const dbContext = offlineResult ? `ИНФОРМАЦИЯ ИЗ БАЗЫ ЗНАНИЙ:\nTitle: ${offlineResult.title}\nContent: ${offlineResult.answer}` : "";
 
-    // Step 2: No offline match → use AI (if configured)
+    // Step 2: If AI is NOT configured
     if (!activeProvider || !apiKey) {
-        return res.json({ status: "error", message: "🔍 Тема не найдена в базе знаний. Настройте AI-провайдер (⚙️), чтобы получать ответы на любые вопросы." });
+        if (offlineResult) {
+            console.log(`  📚 Оффлайн (без AI): "${offlineResult.title}"`);
+            const response = `<strong>${offlineResult.title}</strong><br><br>${offlineResult.answer}<br><br><em style="opacity:0.6">📚 Ответ из базы знаний (AI не настроен)</em>`;
+            return res.json({ status: "ok", message: response, source: "offline" });
+        }
+        return res.json({ status: "error", message: "🔍 Тема не найдена в базе знаний. Настройте AI-провайдер (⚙️), чтобы получать глубокие ответы на любые вопросы." });
     }
 
-    console.log(`  🤖 AI: "${message.substring(0, 50)}..."`);
+    // Step 3: AI is configured → Prepare messages
+    console.log(`  🤖 AI (Grounded): "${message.substring(0, 50)}..."`);
     const messages = [{ role: "system", content: SYSTEM_PROMPT }];
+
+    // Incorporate DB context if found
+    if (dbContext) {
+        messages.push({
+            role: "system",
+            content: `Используй следующую информацию как ПРИОРИТЕТНУЮ основу для ответа. Твоя задача — максимально подробно развернуть её, объяснить причины, привести контекст и сделать ответ глубоким и познавательным, сохраняя верность фактам из базы:\n\n${dbContext}`
+        });
+    }
+
+    // Add history
     if (history && Array.isArray(history)) {
-        for (const msg of history.slice(-20)) {
+        for (const msg of history.slice(-10)) {
             messages.push({ role: msg.role === "user" ? "user" : "assistant", content: msg.text || "" });
         }
     }
+
+    // Add current user message
     messages.push({ role: "user", content: message });
 
+    // Step 4: Call AI
     const result = await callAI(activeProvider, apiKey, messages);
+
     if (result.ok) {
-        result.message += "\n\n_🤖 Ответ от AI_";
+        // AI Success
+        if (offlineResult) {
+            result.message += `\n\n<em style="opacity:0.6">✨ Подробный разбор на основе базы знаний: "${offlineResult.title}"</em>`;
+        } else {
+            result.message += "\n\n<em style='opacity: 0.6'>🤖 Ответ сгенерирован AI</em>";
+        }
+        return res.json({ status: "ok", message: result.message, source: "ai-grounded" });
+    } else {
+        // AI Failed → Fallback to DB if available
+        if (offlineResult) {
+            console.log(`  ⚠️ AI ошибка, возврат к БД: ${result.message}`);
+            const response = `<strong>${offlineResult.title}</strong><br><br>${offlineResult.answer}<br><br><em style="opacity:0.6">📚 Ответ из базы знаний (AI временно недоступен)</em>`;
+            return res.json({ status: "ok", message: response, source: "offline-fallback" });
+        }
+        return res.json({ status: "error", message: result.message });
     }
-    res.json({ status: result.ok ? "ok" : "error", message: result.message });
 });
 
 // ── Start ───────────────────────────────────────────────────
