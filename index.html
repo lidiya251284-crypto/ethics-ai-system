@@ -8,7 +8,7 @@
     <title>Фикх-Помощник</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css">
 </head>
 
@@ -37,57 +37,92 @@
         <!-- Sidebar -->
         <aside class="sidebar" id="sidebar">
             <div class="sidebar-top">
-                <span class="sidebar-logo">☪️ Фикх</span>
+                <div class="sidebar-logo-container">
+                    <span class="sidebar-logo">☪️ Фикх</span>
+                    <span class="sidebar-badge">Pro</span>
+                </div>
                 <button class="sidebar-close" id="sidebar-close" onclick="toggleSidebar()">✕</button>
             </div>
-            <button class="btn-new-chat" onclick="startNewChat()">+ Новый чат</button>
+
+            <button class="btn-new-chat" onclick="startNewChat()">
+                <span class="icon">＋</span> Новый чат
+            </button>
+
+            <div class="sidebar-section-label">Ваши чаты</div>
             <div class="chat-list" id="history-list"></div>
+
             <div class="sidebar-bottom">
-                <button class="btn-settings" onclick="openSetup()">⚙️ Настройки AI</button>
-                <span class="caption" id="provider-label"></span>
+                <button class="btn-settings" onclick="openSetup()">
+                    <span class="icon">⚙️</span> Настройки AI
+                </button>
+                <div class="provider-info">
+                    <span class="status-dot"></span>
+                    <span class="caption" id="provider-label">AI не настроен</span>
+                </div>
             </div>
         </aside>
         <div class="sidebar-overlay" id="sidebar-overlay" onclick="toggleSidebar()"></div>
 
-        <!-- Main -->
+        <!-- Main Content -->
         <main class="main">
-            <div class="main-header" id="main-header">
+            <header class="main-header" id="main-header">
                 <button class="btn-menu" onclick="toggleSidebar()">☰</button>
                 <span class="main-title">Фикх-Помощник</span>
-            </div>
+                <div class="header-actions">
+                    <button class="btn-icon-ghost" onclick="openSetup()">⚙️</button>
+                </div>
+            </header>
 
-            <div class="messages" id="chat-messages">
-                <div class="message bot">
-                    <div class="message-bubble">
-                        Ассаламу алейкум! 👋<br><br>
-                        Я — <strong>Фикх-Помощник</strong>. Задайте вопрос по исламскому праву.<br><br>
-                        <span class="caption">
+            <div class="chat-viewport">
+                <!-- Welcome Screen (Visible when chat is empty) -->
+                <div class="welcome-screen" id="welcome-screen">
+                    <div class="welcome-content">
+                        <h1>Чем я могу помочь?</h1>
+                        <p>Ваш персональный ассистент по вопросам исламского права (фикха).</p>
+                        <div class="welcome-tags">
                             <span class="tag tag-h">Ханафитский</span>
-                            <span class="tag tag-m">Маликитский</span>
                             <span class="tag tag-s">Шафиитский</span>
+                            <span class="tag tag-m">Маликитский</span>
                             <span class="tag tag-b">Ханбалитский</span>
-                        </span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Messages Container -->
+                <div class="messages" id="chat-messages"></div>
+
+                <div class="typing-indicator-container">
+                    <div class="typing" id="typing-indicator">
+                        <div class="typing-dots"><span></span><span></span><span></span></div>
                     </div>
                 </div>
             </div>
 
-            <div class="typing" id="typing-indicator">
-                <div class="typing-dots"><span></span><span></span><span></span></div>
-            </div>
-
-            <div class="input-area">
-                <div class="input-box">
-                    <textarea id="chat-input" placeholder="Задайте вопрос по фикху..." rows="1"
-                        maxlength="2000"></textarea>
-                    <button id="send-btn" class="btn-send" onclick="sendMessage()">➤</button>
+            <!-- Floating Input Area -->
+            <div class="input-container">
+                <div class="input-wrapper">
+                    <div class="input-floating-box">
+                        <textarea id="chat-input" placeholder="Задайте вопрос по фикху..." rows="1"
+                            maxlength="2000"></textarea>
+                        <div class="input-actions">
+                            <span class="char-counter" id="char-counter">0/2000</span>
+                            <button id="send-btn" class="btn-send" onclick="sendMessage()" title="Отправить">➤</button>
+                        </div>
+                    </div>
+                    <p class="caption input-hint">Для серьёзных вопросов всегда обращайтесь к учёному-алиму.</p>
                 </div>
-                <p class="caption input-hint">Для серьёзных вопросов обращайтесь к учёному-алиму</p>
             </div>
         </main>
     </div>
 
     <script src="/static/fiqh_db.js"></script>
     <script src="/static/app.js"></script>
+    <script>
+        // Track character count
+        document.getElementById('chat-input').addEventListener('input', function () {
+            document.getElementById('char-counter').textContent = this.value.length + '/2000';
+        });
+    </script>
 </body>
 
 </html>
